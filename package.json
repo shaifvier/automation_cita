@@ -1,1 +1,21 @@
-{"name":"cita-monitor","private":true,"dependencies":{"playwright":"^1.65.1"}}
+{
+  "name": "cita-monitor",
+  "private": true,
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "start": "node cita-regreso.cjs",
+    "test": "node --test test/core.test.cjs",
+    "test:browser": "node --test test/browser.integration.cjs"
+  },
+  "dependencies": {
+    "node-notifier": "10.0.1",
+    "playwright": "1.65.1"
+  },
+  "overrides": {
+    "node-notifier": {
+      "uuid": "11.1.1"
+    }
+  }
+}

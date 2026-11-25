@@ -8,6 +8,14 @@ node_modules/
 .p12pass
 .env
 .env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+artifacts/
+profiles/
+test-results/
+playwright-report/
 
 # Datos locales y registros
 energia-original.txt

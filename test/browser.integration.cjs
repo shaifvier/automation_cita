@@ -1,0 +1,106 @@
+'use strict';
+// Local fixtures only: this suite never contacts ICP+ or reads .env.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const https = require('node:https');
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { launchSession, certificateOptions } = require('../lib/browser.cjs');
+const { createPortal, ANY_OFFICE } = require('../lib/portal.cjs');
+
+async function fixture() {
+  let final = 'available', reservations = 0, validations = 0, certificateLabel = ' Access   eIdentifier ';
+  const server = http.createServer((req, res) => {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    let body;
+    switch (req.url) {
+      case '/': body = `<label for="office">Selecciona Oficina:</label><select id="office"><option value="any">Cualquier oficina</option></select>
+        <label for="procedure">TRÁMITES POLICÍA NACIONAL</label><select id="procedure"><option value="regreso">AUTORIZACIÓN DE REGRESO</option></select>
+        <button onclick="location='/presentation'">Aceptar</button>`; break;
+      case '/presentation': body = `<a href="/form">Presentación sin Cl@ve</a><a href="/clave">Presentación con Cl@ve</a>`; break;
+      case '/clave': body = `<input type="button" value="${certificateLabel}" onclick="location='/form'">`; break;
+      case '/form': body = `<form action="/validated" method="post"><input id="txtIdCitado" required><input id="txtDesCitado" required><button id="btnEnviar">Aceptar</button></form>`; break;
+      case '/validated': validations++; body = `<button onclick="location='/selection'">Solicitar Cita</button>`; break;
+      case '/selection': body = final === 'available'
+        ? `<h1>Selecciona Oficina</h1><label for="sede">Oficina</label><select id="sede" onchange="location='/reserve'"><option value="">Selecciona</option><option value="1">Oficina de prueba</option></select><button onclick="location='/reserve'">Confirmar reserva</button>`
+        : final === 'unavailable' ? '<p>En este momento no hay citas disponibles. 0501</p><label>Idioma<select><option value="es">Español</option></select></label>'
+        : '<p>Página desconocida</p><button onclick="location=\'/reserve\'">Continuar</button>'; break;
+      case '/reserve': reservations++; body = 'ERROR: booking boundary crossed'; break;
+      default: body = '<p>Fixture</p>';
+    }
+    res.end(`<!doctype html><meta charset="utf-8">${body}`);
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { entry: `http://127.0.0.1:${server.address().port}/`, setFinal: value => { final = value; }, setCertificateLabel: value => { certificateLabel = value; },
+    counts: () => ({ reservations, validations }), close: () => new Promise(resolve => server.close(resolve)) };
+}
+
+for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
+  test(`${mode}: full fixture flow stops before reservation and classifies pages`, { timeout: 180000 }, async () => {
+    const site = await fixture();
+    let session;
+    try {
+      session = await launchSession(mode);
+      const portal = createPortal(session, { entry: site.entry, stepDelayMs: 0, sleep: async () => {}, identity: { nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' } });
+      for (const [final, expected] of [['available', 'posible disponibilidad'], ['unavailable', 'sin citas'], ['unknown', 'revisión']]) {
+        site.setFinal(final);
+        assert.equal((await portal.open()).result, 'ok');
+        const result = await portal.checkOffice(ANY_OFFICE);
+        assert.equal(result.result, expected);
+        if (final === 'unavailable') assert.equal(result.code, '0501');
+        assert.equal(site.counts().reservations, 0);
+      }
+      assert.equal(site.counts().validations, 3);
+      site.setFinal('available');
+      let certPortal;
+      for (const label of [' Access   eIdentifier ', 'Acceso DNIe / Certificado electrónico']) {
+        site.setCertificateLabel(label);
+        certPortal = createPortal(session, { entry: site.entry, certificate: true, stepDelayMs: 0, sleep: async () => {}, identity: { nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' } });
+        assert.equal((await certPortal.open()).result, 'ok');
+        assert.equal((await certPortal.checkOffice(ANY_OFFICE)).result, 'posible disponibilidad');
+        assert.equal(site.counts().reservations, 0);
+      }
+      if (mode === 'seleniumbase') assert.equal(await session.solveChallenge(), true, 'bridge selects exact CDP target');
+      certPortal.hold();
+      const before = site.counts();
+      assert.equal((await certPortal.open()).reason, 'human_handoff');
+      assert.equal((await certPortal.checkOffice(ANY_OFFICE)).reason, 'human_handoff');
+      assert.deepEqual(site.counts(), before);
+    } finally { if (session) await session.close(); await site.close(); }
+  });
+}
+
+test('SeleniumBase CDP: encrypted PEM context presents a client certificate', { timeout: 180000 }, async () => {
+  fs.mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });
+  const dir = fs.mkdtempSync(path.join(__dirname, '..', 'artifacts', 'mtls-'));
+  const cert = path.join(dir, 'cert.pem'), key = path.join(dir, 'key.pem'), pass = path.join(dir, 'pass.txt');
+  fs.writeFileSync(pass, 'synthetic-fixture-only');
+  const config = path.join(dir, 'openssl.cnf'); fs.writeFileSync(config, '');
+  const openssl = process.env.OPENSSL || 'C:/Strawberry/c/bin/openssl.exe';
+  execFileSync(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-config', config, '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=synthetic-fixture', '-passout', 'pass:synthetic-fixture-only'], { stdio: 'ignore' });
+  let presented = false;
+  const server = https.createServer({ cert: fs.readFileSync(cert), key: fs.readFileSync(key), passphrase: 'synthetic-fixture-only', ca: fs.readFileSync(cert), requestCert: true, rejectUnauthorized: true }, (req, res) => {
+    presented = req.socket.authorized && req.socket.getPeerCertificate().subject?.CN === 'synthetic-fixture';
+    res.end('fixture');
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let session;
+  try {
+    const opts = certificateOptions({ CITA_CERT_PEM: cert, CITA_KEY_PEM: key, CITA_CERT_PASS_FILE: pass });
+    opts.clientCertificates[0].origin = `https://127.0.0.1:${server.address().port}`;
+    // The fixture has a self-signed SERVER certificate. Production never enables this.
+    opts.ignoreHTTPSErrors = true;
+    session = await launchSession('seleniumbase', opts);
+    await session.page.goto(opts.clientCertificates[0].origin);
+    assert.equal(presented, true);
+    assert.equal(await session.solveChallenge(), true, 'helper can address certificate-context tab');
+  } finally {
+    if (session) await session.close();
+    await new Promise(resolve => server.close(resolve));
+    // Remove only the exact synthetic files created by this test.
+    for (const file of [cert, key, pass, config]) fs.unlinkSync(file);
+    fs.rmdirSync(dir);
+  }
+});

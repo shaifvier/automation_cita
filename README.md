@@ -1,74 +1,119 @@
-# Monitor de cita ICP+ — Autorización de regreso (Barcelona)
+# Monitor ICP+ — Autorización de regreso (Barcelona)
 
-Script de Node.js + Playwright (Firefox) que consulta periódicamente el portal de
-cita previa de extranjería (ICP+) para el trámite **«AUTORIZACIÓN DE REGRESO»** en la
-provincia de Barcelona y avisa (pitido + ventana abierta) si aparece una pantalla
-distinta de «no hay citas». **No reserva**: la reserva la termina una persona.
+Monitor de disponibilidad con Node.js + Playwright. Ofrece Firefox, Chrome normal
+y Chrome lanzado por SeleniumBase y conectado por CDP. **No reserva citas**:
+se detiene ante una pantalla reconocible de selección de oficina/fecha/hora,
+emite un aviso de Windows y deja la ventana para que una persona continúe.
+Una pantalla desconocida produce un aviso de revisión distinto.
 
-## Conclusión importante
+La detección real de disponibilidad sigue siendo experimental. Una respuesta
+«no hay citas», incluidos los códigos 0017/0501, no demuestra por sí sola ni la
+ausencia de citas ni un bloqueo por automatización. Véase
+[el informe de investigación](docs/browser-research.md).
 
-ICP+ detecta que el navegador está automatizado y le responde **«no hay citas»
-(códigos 0017 / 0501) aunque haya citas disponibles**. Se comprobó en la provincia de
-Lleida: en Chrome normal aparecía el paso «Selecciona Oficina» con hueco, y en el
-navegador del script, incluso manejado a mano, «no hay citas» (0501).
+## Preparación (Windows, sesión de escritorio abierta)
 
-Por tanto **este monitor no puede detectar citas** tal como está, y no se ha intentado
-ocultar la automatización (sería eludir el filtro anti-bots del portal). La forma
-fiable es consultar a mano en un navegador normal.
-
-## Qué hace
-
-- Abre el selector de Barcelona, elige oficina («Cualquier oficina» o todas una a una),
-  el trámite y entra por «Presentación sin Cl@ve» o «con Cl@ve» (certificado).
-- Rellena NIE y nombre (de variables de entorno), envía y clasifica la respuesta:
-  sin citas (con su código), sin trámite, rechazo (403/429/«Request Rejected»),
-  sesión caducada, fallo temporal, CAPTCHA o pantalla a revisar.
-- Respeta los límites del portal: pausa adaptativa entre consultas (85–150 s) que sube
-  con cada 429, y espera de 60 s → 120 s → 300 s tras rechazos o fallos.
-- No guarda datos personales en disco; la salida se redacta.
-
-## Uso
+Requisitos: Node >=20.12, Python 3.12 y Google Chrome instalado.
 
 ```powershell
-npm install
+npm ci
 npx playwright install firefox
-
-$env:CITA_NIE = 'X0000000X'          # NIE del solicitante
-$env:CITA_NOMBRE = 'NOMBRE APELLIDO'
-
-# Sin certificado, todas las comisarías:
-node .\cita-regreso.cjs --red
-
-# Con certificado (Cl@ve), solo «Cualquier oficina»:
-node .\cita-regreso.cjs --red --certificado --solo-cualquiera --pausa=110
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-lock.txt
+Copy-Item .env.example .env
 ```
 
-Opciones: `--red` (traza de navegación sin datos personales), `--certificado`,
-`--solo-cualquiera`, `--desde=OFICINA`, `--pausa=SEGUNDOS`, `--diagnostico`
-(comprueba el formulario sin enviar datos).
+Edita **solo `.env`**, que Git ignora. Sustituye `CITA_NIE` y `CITA_NOMBRE`.
+Para `CITA_PYTHON`, usa la ruta a `.venv/Scripts/python.exe` de tu clon.
+No publiques ese archivo ni pegues datos privados en issues o conversaciones.
 
-### Certificado (opcional)
+```powershell
+# Verificar que Windows muestra el aviso (sin consultar el portal):
+node .\cita-regreso.cjs --probar-aviso
 
-Para `--certificado` hacen falta, junto al script (o en las rutas indicadas por
-`CITA_CERT_PEM`, `CITA_KEY_PEM`, `CITA_CERT_PASS_FILE`):
+# Una consulta con SeleniumBase, sin Cl@ve:
+node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --una-consulta
 
-- `cert.pem`: certificado del titular.
-- `key.pem`: clave privada **cifrada** (AES-256).
-- `.p12pass`: contraseña de la clave.
+# Monitor periódico con certificado, cualquier oficina de Barcelona:
+node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --certificado --solo-cualquiera
 
-Conversión desde un `.p12` de la FNMT (cifrado antiguo RC2/3DES):
-
-```bash
-openssl pkcs12 -legacy -in cert.p12 -clcerts -nokeys -out cert.pem
-openssl pkcs12 -legacy -in cert.p12 -nocerts -aes256 -out key.pem
+# Diagnóstico público: llega al formulario sin rellenar ni enviar NIE/nombre:
+node .\cita-regreso.cjs --browser=chrome --diagnostico
 ```
 
-Estos archivos están en `.gitignore` y **no deben subirse nunca**.
+Firefox sigue siendo el navegador predeterminado. `--browser=chrome` usa Chrome
+lanzado por Playwright; `--browser=seleniumbase` usa un perfil independiente y
+un helper de Python local. No se usa el perfil personal de Chrome.
 
-## Notas técnicas
+## Certificado
 
-- El servidor de ICP+ no envía el certificado intermedio (RapidSSL TLS RSA CA G1);
-  Firefox se lanza con `security.enterprise_roots.enabled` para usar el almacén de
-  Windows. La validación TLS sigue activa.
-- `sin-tramite.json` guarda las comisarías que no ofrecen el trámite; se revisan cada
-  10 rondas.
+`--certificado` conserva la configuración existente de PEM, clave privada
+**cifrada** y archivo de contraseña. Configura en `.env`:
+
+- `CITA_CERT_PEM`: ruta al certificado PEM.
+- `CITA_KEY_PEM`: ruta a la clave PEM cifrada.
+- `CITA_CERT_PASS_FILE`: ruta al archivo de contraseña.
+
+Se presentan únicamente a `https://pasarela-ident.clave.gob.es`. Los valores
+predeterminados son `cert.pem`, `key.pem` y `.p12pass` junto al script. No se
+importan certificados en Windows ni se cambian políticas de Chrome. Si falla
+Cl@ve, se solicita revisión; no se cambia automáticamente a la ruta sin Cl@ve.
+La validación TLS permanece activa en el monitor.
+
+## Funcionamiento y opciones
+
+- Pausa predeterminada de **120 s** entre consultas completadas; mínimo de 85 s,
+  incluso al cambiar de ronda u oficina. `--pausa=SEGUNDOS` permite aumentarla.
+- `Retry-After` puede prolongar la espera. Hay retroceso adaptativo y se entrega
+  el control tras tres fallos consecutivos. No se reinician sesiones para evitar
+  rechazos o límites del portal.
+- `--solo-cualquiera` consulta únicamente «Cualquier oficina». Sin esa opción,
+  recorre oficinas e intercala «Cualquier oficina» cada cinco oficinas.
+- `--desde=OFICINA` reanuda desde una coincidencia única. Combinado con
+  `--una-consulta`, consulta únicamente esa oficina.
+- `--max-consultas=N` limita el número de intentos; incluye fallos de apertura.
+  `--una-consulta` equivale a un intento y no reintenta fallos.
+- `--diagnostico` hace un intento por defecto y no lee datos del solicitante;
+  admite `--max-consultas=N` para repetir el diagnóstico público.
+- `--red` añade metadatos de navegación sin URLs, cuerpos, cabeceras ni cookies.
+- SeleniumBase intenta su manejador de CAPTCHA una vez por episodio. Un proceso
+  separado limita la ejecución a 55 s y termina antes de la entrega al usuario.
+  La página se vuelve a clasificar: que el método termine no prueba que haya
+  resuelto el desafío. Si no puede continuar, avisa y se detiene.
+- Una posible disponibilidad, pantalla desconocida o sesión caducada detiene
+  la automatización. El aviso suena cada 20 s durante hasta 10 min; la ventana
+  y el contexto permanecen abiertos hasta que la persona los cierre.
+- Windows puede ocultar avisos por su configuración o modo de concentración.
+  El pitido y el mensaje de consola sirven como aviso adicional.
+
+La salida JSON contiene hora UTC, navegador, autenticación, oficina, etapa,
+HTTP, resultado, código de respuesta y motivo enumerado de revisión. No guarda texto de página, datos del
+solicitante ni material del certificado. `artifacts/` contiene únicamente
+caché local de oficinas y, si ejecutas la investigación, registros sanitizados;
+Git ignora esa carpeta. Las oficinas sin trámite se revisan cada diez rondas.
+
+## Pruebas y comparación reproducible
+
+```powershell
+npm test
+npm run test:browser
+.\.venv\Scripts\python.exe -m unittest discover -s test -p test_bridge.py
+
+# Comparación real: Firefox/Chrome/SeleniumBase, con y sin certificado.
+# Una consulta por combinación, secuencial y con >=120 s entre consultas:
+node --env-file=.env .\scripts\research.cjs --repeticiones=1
+
+# Prueba periódica real: tres consultas SeleniumBase con certificado:
+node --env-file=.env .\scripts\research.cjs --humo
+```
+
+La comparación admite `--repeticiones=2` (predeterminado), limita el trabajo
+automático a 45 min entre consultas y se detiene tras cualquier entrega al
+usuario. No la ejecutes en paralelo con otro monitor. Compara manualmente el
+mismo trámite, oficina, solicitante y autenticación en un Chrome normal, sin
+seleccionar ni reservar una cita.
+
+Las pruebas de navegador usan exclusivamente fixtures locales y una identidad
+sintética. La prueba mTLS genera certificados sintéticos temporales; solo esa
+prueba acepta el certificado de servidor autofirmado. Requiere OpenSSL en
+`C:/Strawberry/c/bin/openssl.exe` o la variable `OPENSSL` con la ruta correspondiente.
