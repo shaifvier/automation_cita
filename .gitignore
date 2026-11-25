@@ -1,0 +1,15 @@
+# Dependencias
+node_modules/
+
+# Secretos: certificado, clave privada y contraseña. NUNCA subir.
+*.pem
+*.p12
+*.pfx
+.p12pass
+.env
+.env.*
+
+# Datos locales y registros
+energia-original.txt
+*.log
+monitor.log
