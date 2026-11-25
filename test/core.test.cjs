@@ -63,8 +63,8 @@ test('placeholders and certificate errors never echo input', async () => {
   assert.throws(() => certificateOptions({ CITA_KEY_PEM: 'PRIVATE-PATH' }), error => !error.message.includes('PRIVATE-PATH'));
 });
 test('notifications distinguish availability, review, challenge and test', async () => {
-  const titles = ['posible disponibilidad', 'revisión', 'captcha', 'prueba', 'enfriamiento', 'reanudado'].map(kind => notification(kind).title);
-  assert.equal(new Set(titles).size, 6);
+  const titles = ['posible disponibilidad', 'revisión', 'captcha', 'prueba', 'enfriamiento', 'reanudado', 'sesion_caducada'].map(kind => notification(kind).title);
+  assert.equal(new Set(titles).size, 7);
   assert.match(notification('enfriamiento', 'Barcelona', { waitSeconds: 3600 }).message, /60 min/);
   assert.equal(await notify('prueba', undefined, { notify: (_, callback) => callback(null) }), true);
   assert.equal(await notify('prueba', undefined, { notify: () => { throw new Error(); } }), false);
@@ -103,8 +103,8 @@ test('potential availability stops immediately and hands off once', async () => 
   const h = harness([{ result: 'posible disponibilidad' }]);
   await h.run(); assert.equal(h.records.length, 1); assert.equal(h.result().held, 1); assert.deepEqual(h.waits, []);
 });
-test('unknown page and certificate expiry stop rather than retry authentication', async () => {
-  for (const result of ['revisión', 'sesión caducada']) {
+test('unknown pages still stop for review', async () => {
+  for (const result of ['revisión']) {
     const h = harness([{ result }]); await h.run(); assert.equal(h.records.length, 1); assert.equal(h.result().held, 1);
   }
 });
@@ -153,7 +153,7 @@ test('a new failure episode restarts at the initial cooldown after recovery', as
 });
 
 test('CAPTCHA or unknown page after cooldown still hands off without announcing recovery', async () => {
-  for (const result of ['captcha', 'revisión', 'sesión caducada', 'posible disponibilidad']) {
+  for (const result of ['captcha', 'revisión', 'posible disponibilidad']) {
     const h = harness([...Array(3).fill({ result: 'rechazo', httpStatus: 403 }), { result }], { maxChecks: 5 });
     await h.run(); assert.equal(h.result().held, 1);
     assert.deepEqual(h.waits, [120000, 120000, 900000]);
@@ -219,4 +219,51 @@ test('closing the browser page interrupts cooldown without another probe', async
   assert.equal((await h.run()).result, 'detenido');
   assert.equal(h.records.filter(r => r.stage === 'selection').length, 3);
   assert.equal(h.result().closed, true);
+});
+
+test('screenshot inactivity message is expired even with stale appointment controls', () => {
+  assert.equal(classify({ text: 'Su sesión ha caducado por permanecer demasiado tiempo inactiva. Deberás iniciar de nuevo la solicitud de la cita previa.', httpStatus: 200, selectionStage: true, choices: [{ label: 'Oficina', usable: true }] }), 'sesión caducada');
+});
+
+test('an expired request restarts at the normal interval in the same browser', async () => {
+  const h = harness([{ result: 'sesión caducada' }, { result: 'sin citas' }, { result: 'sin citas' }]);
+  await h.run();
+  assert.deepEqual(h.waits, [120000, 120000]);
+  assert.deepEqual(h.notifications.map(n => n.kind), ['sesion_caducada', 'reanudado']);
+  assert.equal(h.records[0].reason, 'session_restart_scheduled');
+  assert.equal(h.records.find(r => r.result === 'reanudado').reason, 'session_recovered');
+  assert.equal(h.result().launches, 1); assert.equal(h.result().held, 0);
+});
+
+test('a third expiry hands off after at most two request restarts', async () => {
+  const h = harness(Array(3).fill({ result: 'sesión caducada' }), { maxChecks: 5 });
+  assert.equal((await h.run()).result, 'sesión caducada');
+  assert.deepEqual(h.waits, [120000, 120000]);
+  assert.equal(h.records.at(-1).reason, 'session_restart_limit');
+  assert.equal(h.result().held, 1); assert.equal(h.result().launches, 1);
+});
+
+test('expiry during rate-limit recovery does not reset the block cooldown progression', async () => {
+  const failure = { result: 'rechazo', httpStatus: 429 };
+  const h = harness([failure, failure, failure, { result: 'sesión caducada' }, failure, { result: 'sin citas' }], { maxChecks: 6 });
+  await h.run();
+  assert.deepEqual(h.waits, [130000, 130000, 900000, 130000, 1800000]);
+  assert.deepEqual(h.notifications.map(n => n.kind), ['enfriamiento', 'sesion_caducada', 'enfriamiento', 'reanudado']);
+  assert.equal(h.result().held, 0); assert.equal(h.result().launches, 1);
+});
+
+test('successful queries reset the request-restart allowance', async () => {
+  const expired = { result: 'sesión caducada' }, success = { result: 'sin citas' };
+  const h = harness([expired, success, expired, success, expired, success], { maxChecks: 6 });
+  await h.run();
+  assert.equal(h.result().held, 0);
+  assert.equal(h.notifications.filter(n => n.kind === 'sesion_caducada').length, 3);
+});
+
+test('expiry restart respects Retry-After and bounded-run limits', async () => {
+  const h = harness([{ result: 'sesión caducada', retryAfter: '600' }, { result: 'sin citas' }], { maxChecks: 2 });
+  await h.run(); assert.deepEqual(h.waits, [600000]);
+  const single = harness([{ result: 'sesión caducada' }], { maxChecks: 1, once: true });
+  await single.run(); assert.deepEqual(single.waits, []); assert.equal(single.result().held, 1);
+  assert.equal(single.records[0].reason, 'session_restart_bound');
 });

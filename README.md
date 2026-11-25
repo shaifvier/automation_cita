@@ -74,9 +74,17 @@ La validación TLS permanece activa en el monitor.
   el servicio; la consola registra `enfriamiento`/`reanudado`, `waitSeconds` y
   `retryAt` (UTC). La fecha indica el momento más temprano previsto para reintentar.
 - Cerrar la ventana o pulsar Ctrl+C interrumpe la pausa inmediatamente. CAPTCHA
-  no resuelto, sesión caducada o página desconocida siguen requiriendo revisión.
+  no resuelto o página desconocida siguen requiriendo revisión.
   `--una-consulta`, `--max-consultas` y el límite de investigación siguen vigentes:
   no se hacen reintentos fuera de esos límites.
+- Si ICP+ indica que la solicitud ha caducado por inactividad, se inicia de nuevo
+  el flujo desde Barcelona, con la misma oficina, identidad y autenticación,
+  tras la pausa normal (o un `Retry-After` mayor). Se conservan el navegador,
+  las cookies y el estado de los bloqueos anteriores. Se permiten **dos reinicios**
+  sin completar una consulta normal; una tercera caducidad requiere revisión.
+  La consola conserva `sesión caducada` como diagnóstico y añade el motivo
+  `session_restart_scheduled` o `session_restart_limit`. Windows avisa del
+  reinicio programado y de la recuperación. Una consulta normal restablece el límite.
 - `--solo-cualquiera` consulta únicamente «Cualquier oficina». Sin esa opción,
   recorre oficinas e intercala «Cualquier oficina» cada cinco oficinas.
 - `--desde=OFICINA` reanuda desde una coincidencia única. Combinado con
@@ -90,7 +98,7 @@ La validación TLS permanece activa en el monitor.
   separado limita la ejecución a 55 s y termina antes de la entrega al usuario.
   La página se vuelve a clasificar: que el método termine no prueba que haya
   resuelto el desafío. Si no puede continuar, avisa y se detiene.
-- Una posible disponibilidad, pantalla desconocida o sesión caducada detiene
+- Una posible disponibilidad, pantalla desconocida o caducidad repetida detiene
   la automatización. El aviso suena cada 20 s durante hasta 10 min; la ventana
   y el contexto permanecen abiertos hasta que la persona los cierre.
 - Windows puede ocultar avisos por su configuración o modo de concentración.

@@ -14,6 +14,7 @@ const { createPortal, ANY_OFFICE } = require('../lib/portal.cjs');
 async function fixture() {
   let final = 'available', reservations = 0, validations = 0, certificateLabel = ' Access   eIdentifier ', blocks = 0;
   const cookies = [];
+  let finalSequence = [];
   const server = http.createServer((req, res) => {
     if (req.url === '/') {
       cookies.push(req.headers.cookie || '');
@@ -29,10 +30,14 @@ async function fixture() {
       case '/clave': body = `<input type="button" value="${certificateLabel}" onclick="location='/form'">`; break;
       case '/form': body = `<form action="/validated" method="post"><input id="txtIdCitado" required><input id="txtDesCitado" required><button id="btnEnviar">Aceptar</button></form>`; break;
       case '/validated': validations++; body = `<button onclick="location='/selection'">Solicitar Cita</button>`; break;
-      case '/selection': body = final === 'available'
+      case '/selection': {
+        const view = finalSequence.length ? finalSequence.shift() : final;
+        body = view === 'available'
         ? `<h1>Selecciona Oficina</h1><label for="sede">Oficina</label><select id="sede" onchange="location='/reserve'"><option value="">Selecciona</option><option value="1">Oficina de prueba</option></select><button onclick="location='/reserve'">Confirmar reserva</button>`
-        : final === 'unavailable' ? '<p>En este momento no hay citas disponibles. 0501</p><label>Idioma<select><option value="es">Español</option></select></label>'
+        : view === 'unavailable' ? '<p>En este momento no hay citas disponibles. 0501</p><label>Idioma<select><option value="es">Español</option></select></label>'
+        : view === 'expired' ? '<p>Su sesión ha caducado por permanecer demasiado tiempo inactiva.</p><p>Deberás iniciar de nuevo la solicitud de la cita previa.</p><button onclick="location=\'/reserve\'">Aceptar</button>'
         : '<p>Página desconocida</p><button onclick="location=\'/reserve\'">Continuar</button>'; break;
+      }
       case '/reserve': reservations++; body = 'ERROR: booking boundary crossed'; break;
       default: body = '<p>Fixture</p>';
     }
@@ -40,6 +45,7 @@ async function fixture() {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return { entry: `http://127.0.0.1:${server.address().port}/`, setFinal: value => { final = value; }, setCertificateLabel: value => { certificateLabel = value; },
+    setFinalSequence: values => { finalSequence = [...values]; },
     setBlocks: value => { blocks = value; }, counts: () => ({ reservations, validations, cookies: [...cookies] }), close: () => new Promise(resolve => server.close(resolve)) };
 }
 
@@ -50,7 +56,7 @@ for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
     try {
       session = await launchSession(mode);
       const portal = createPortal(session, { entry: site.entry, stepDelayMs: 0, sleep: async () => {}, identity: { nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' } });
-      for (const [final, expected] of [['available', 'posible disponibilidad'], ['unavailable', 'sin citas'], ['unknown', 'revisión']]) {
+      for (const [final, expected] of [['available', 'posible disponibilidad'], ['unavailable', 'sin citas'], ['unknown', 'revisión'], ['expired', 'sesión caducada']]) {
         site.setFinal(final);
         assert.equal((await portal.open()).result, 'ok');
         const result = await portal.checkOffice(ANY_OFFICE);
@@ -58,7 +64,7 @@ for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
         if (final === 'unavailable') assert.equal(result.code, '0501');
         assert.equal(site.counts().reservations, 0);
       }
-      assert.equal(site.counts().validations, 3);
+      assert.equal(site.counts().validations, 4);
       site.setFinal('available');
       let certPortal;
       for (const label of [' Access   eIdentifier ', 'Acceso DNIe / Certificado electrónico']) {
@@ -137,5 +143,33 @@ test('rate-limit recovery retains actual browser cookies and stops before bookin
     assert.ok(site.counts().cookies.every(cookie => cookie.includes('probe-session=synthetic-retained-cookie')));
     assert.equal(site.counts().reservations, 0);
     assert.equal(site.counts().validations, 1);
+  } finally { await site.close(); }
+});
+
+test('an expired check after cooldown restarts the request with cookies intact', { timeout: 60000 }, async () => {
+  const site = await fixture();
+  site.setBlocks(3); site.setFinalSequence(['expired', 'unavailable']);
+  let clock = Date.now(), launches = 0;
+  const waits = [], notices = [], records = [];
+  try {
+    const result = await runMonitor(options(['--browser=chrome', '--solo-cualquiera', '--max-consultas=5']), {
+      readIdentity: async () => ({ nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' }),
+      launchSession: async mode => {
+        launches++;
+        const session = await launchSession(mode);
+        await session.context.addCookies([{ name: 'expiry-session', value: 'synthetic-retained-cookie', url: site.entry }]);
+        return session;
+      },
+      createPortal: (session, opts) => createPortal(session, { ...opts, entry: site.entry, stepDelayMs: 0, sleep: async () => {} }),
+      now: () => clock, sleep: async ms => { waits.push(ms); clock += ms; },
+      output: record => records.push(record), notify: async kind => notices.push(kind),
+    });
+    assert.equal(result.checks, 5);
+    assert.deepEqual(waits, [130000, 130000, 900000, 130000]);
+    assert.deepEqual(notices, ['enfriamiento', 'sesion_caducada', 'reanudado']);
+    assert.equal(records.find(r => r.result === 'sesión caducada').reason, 'session_restart_scheduled');
+    assert.equal(launches, 1); assert.equal(site.counts().cookies.length, 5);
+    assert.ok(site.counts().cookies.every(cookie => cookie.includes('expiry-session=synthetic-retained-cookie')));
+    assert.equal(site.counts().validations, 2); assert.equal(site.counts().reservations, 0);
   } finally { await site.close(); }
 });

@@ -114,11 +114,11 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 
 Validation completed:
 
-- **43 Node tests**: classification, response codes, timing/Retry-After, action
+- **49 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
-- **5 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
-  mTLS handshake, plus a real-browser HTTP 429 recovery fixture. All flows use local fixtures and synthetic identities. The
+- **6 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
+  mTLS handshake, plus real-browser HTTP 429 and expired-request recovery fixtures. All flows use local fixtures and synthetic identities. The
   booking sentinel received **zero requests**. The certificate-entry fixture
   includes whitespace in the input button's accessible name.
 - **2 Python tests**: worker timeout/failure behavior and subprocess argument/data
@@ -140,7 +140,7 @@ Windows receives pause/recovery notifications. JSON records add `waitSeconds`
 and `retryAt` (UTC), with `enfriamiento` and `reanudado` transition events. Closing
 the browser or Ctrl+C interrupts the wait. Cookies, cache, applicant identity,
 client certificate configuration and the pending office remain in the same
-session. CAPTCHA, unknown-page and expired-session handoff still stop automation.
+session. CAPTCHA and unknown-page handoff still stop automation; repeated expiry is bounded as described below.
 Bounded runs stop at their attempt/deadline limits; the research runner carries
 recorded retry deadlines across cases and later invocations.
 
@@ -151,6 +151,34 @@ booking sentinel received zero requests. Additional tests cover repeated failed
 probes, long/date Retry-After, episode reset, notifications, cancellation and
 research deadlines. We did not deliberately cause a live ICP+ block to test this
 change. The earlier live observations above remain the evidence for portal access.
+
+## Expired-request recovery update
+
+The user reported the portal message "Su sesión ha caducado por permanecer
+demasiado tiempo inactiva" with HTTP 200 and `result: "sesión caducada"` at
+the selection stage. The screenshot and JSON confirm correct classification;
+the interruption came from the previous intentional human-handoff policy.
+They do not establish the cause or duration of the server-side expiry.
+
+The monitor now schedules up to two request-flow restarts at the normal polling
+interval, respecting any longer Retry-After. The next check navigates to the
+fixed Barcelona entry point and repeats the configured office/procedure and
+certificate/non-certificate path in the same browser context. It does not click
+the expired page's Aceptar button, clear cookies/cache, recreate the browser,
+or reset the rate-limit failure count. A third expiry without a successful
+normal query still hands off for review. Successful normal checks reset the
+restart allowance; bounded-run attempt/deadline limits remain in force.
+
+Expiry records retain `sesión caducada` with `session_restart_scheduled`, wait
+metadata and a Windows scheduled-restart notification. Recovery emits `reanudado`
+with reason `session_recovered`. Repeated expiry uses `session_restart_limit`.
+A local HTTP/browser fixture reproduced the exact message after three 429s,
+then completed the restarted check with the original synthetic cookie intact.
+Its expired-page Aceptar button deliberately points to the booking sentinel;
+that sentinel received zero requests. Unit tests also cover restart bounds,
+rate-limit progression across expiry, successful episode reset and Retry-After.
+This validates recovery behavior locally; it does not establish that every
+live portal expiry can be recovered automatically.
 
 ## Limits and next evidence needed
 

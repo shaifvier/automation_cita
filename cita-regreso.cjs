@@ -133,7 +133,7 @@ async function runMonitor(opts, dependencies = {}) {
       for (const label of cached) if (typeof label === 'string') excluded.add(label);
     } catch { /* Cache is optional; empty means check every office. */ }
   }
-  let delay = 0, failures = 0, cleanStreak = 0, interval = opts.interval;
+  let delay = 0, failures = 0, sessionRestarts = 0, cleanStreak = 0, interval = opts.interval;
   let queue = [], round = 0, checks = 0, resume = opts.resume;
   try {
     while (portal.alive() && !controller.signal.aborted && checks < opts.maxChecks) {
@@ -163,7 +163,27 @@ async function runMonitor(opts, dependencies = {}) {
         cleanStreak = 0;
         state = { ...state, waitSeconds: Math.ceil(delay / 1000), retryAt: new Date(now() + delay).toISOString() };
       }
+      const expired = state.result === 'sesión caducada';
+      let restartSession = false;
+      if (expired) {
+        cleanStreak = 0;
+        const restartDelay = Math.max(interval, retryAfterMs(state.retryAfter, now()));
+        restartSession = sessionRestarts < 2 && checks < opts.maxChecks && (!opts.deadline || now() + restartDelay < opts.deadline);
+        if (restartSession) {
+          sessionRestarts++;
+          delay = restartDelay;
+          state = { ...state, reason: 'session_restart_scheduled', waitSeconds: Math.ceil(delay / 1000), retryAt: new Date(now() + delay).toISOString() };
+        } else {
+          state = { ...state, reason: sessionRestarts >= 2 ? 'session_restart_limit' : 'session_restart_bound' };
+        }
+      }
       report(state, label);
+      if (restartSession) {
+        await signalStatus('sesion_caducada', label, { waitSeconds: state.waitSeconds });
+        // The next portal.open() starts a new ICP+ request in the SAME context.
+        // Do not clear cookies or reset the rate-limit failure count here.
+        continue;
+      }
       const handoff = ['posible disponibilidad', 'captcha', 'revisión', 'sesión caducada'].includes(state.result);
       if (handoff) {
         // Diagnostic mode never submitted identity and is a bounded public probe.
@@ -177,11 +197,12 @@ async function runMonitor(opts, dependencies = {}) {
           await signalStatus('enfriamiento', label, { waitSeconds: state.waitSeconds });
         }
       } else {
-        if (failures >= 3) {
-          report({ stage: 'monitor', httpStatus: state.httpStatus, result: 'reanudado' }, label);
+        if (failures >= 3 || sessionRestarts > 0) {
+          report({ stage: 'monitor', httpStatus: state.httpStatus, result: 'reanudado', reason: sessionRestarts > 0 ? 'session_recovered' : 'service_recovered' }, label);
           await signalStatus('reanudado', label);
         }
         failures = 0;
+        sessionRestarts = 0;
         if (++cleanStreak >= 10) { interval = Math.max(opts.interval, interval - 5000); cleanStreak = 0; }
         delay = interval;
         queue.shift();
