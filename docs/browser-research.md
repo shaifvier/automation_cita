@@ -199,3 +199,24 @@ selection screen. Stop at that screen and compare outcomes without choosing a sl
 - [SeleniumBase CDP documentation](https://seleniumbase.io/examples/cdp_mode/ReadMe/): built-in challenge API; supported examples are not guarantees for ICP+.
 - [Playwright connectOverCDP](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp): Chromium-only, lower-fidelity connection with an accessible default context.
 - [Playwright client certificates](https://playwright.dev/docs/api/class-browser#browser-new-context-option-client-certificates): origin-scoped certificate configuration on browser contexts.
+
+## Overnight observation
+
+A separate read-only observer can attach to an already-running monitor-owned
+Chrome without restarting its appointment checks. It reads categorical page
+state every 30 seconds, writes a private JSONL journal and Markdown report,
+and captures private PNG evidence when a possible availability page is observed.
+It neither navigates nor enters data, clears state, or books an appointment.
+Observed times are observation times, not verified appointment-release times.
+
+The observer follows the original monitor PID, preserves its journal across
+observer restarts, and issues a scoped Windows keep-awake request until it exits.
+This does not override manual sleep, lid closure, shutdown, or sign-in policies.
+Primary monitoring/Windows alerts remain with the existing Node process; the
+observer is automatic documentation, not continuous human or AI review.
+
+Six observer tests cover host restrictions, expiry/form classification, report
+history and Madrid timestamps, locked-report resilience, allowed read-only CDP
+methods, and retaining candidate observations when screenshot capture fails.
+No live appointment was selected to test capture. Overnight reports and images
+remain under ignored `artifacts/`; they are not part of the public research data.

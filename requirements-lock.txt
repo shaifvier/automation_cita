@@ -52,6 +52,7 @@ tabcompleter==1.4.1
 trio==0.35.0
 trio-websocket==0.12.2
 typing_extensions==4.16.0
+tzdata==2026.6
 urllib3==2.8.0
 websocket-client==1.9.2
 websockets==17.4

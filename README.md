@@ -135,3 +135,30 @@ Las pruebas de navegador usan exclusivamente fixtures locales y una identidad
 sintética. La prueba mTLS genera certificados sintéticos temporales; solo esa
 prueba acepta el certificado de servidor autofirmado. Requiere OpenSSL en
 `C:/Strawberry/c/bin/openssl.exe` o la variable `OPENSSL` con la ruta correspondiente.
+
+## Observador de larga duracion (sin reiniciar el monitor)
+
+`watch_monitor.py` puede observar por CDP el Chrome de un monitor SeleniumBase ya
+abierto. Se le pasan el PID de Node y el puerto CDP de ese navegador. No navega,
+no rellena formularios, no cambia cookies ni realiza consultas al portal.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/watch_monitor.py --monitor-pid PID_NODE --port PUERTO_CDP --output artifacts/overnight
+```
+
+Cada 30 s escribe `observations.jsonl`, `status.json` y `report.md`. Los tiempos
+legibles usan Europe/Madrid. Son muestras del estado del navegador, no recuentos
+de consultas ni pruebas de la hora exacta de apertura de una cita. Una pantalla
+con posibles opciones de cita se conserva como captura PNG privada para revision.
+El monitor principal sigue gestionando los avisos de Windows y la entrega manual.
+
+El observador puede ejecutarse como proceso independiente del chat. En Windows
+mantiene una solicitud temporal para evitar la suspension automatica mientras
+observa; no cambia el plan de energia y libera la solicitud al terminar. No evita
+un apagado, la suspension manual ni el cierre de la tapa. Mantener el equipo
+encendido y conectado a corriente sigue siendo necesario. Termina cuando sale
+el PID original del monitor. Puede reiniciarse conservando el historial local.
+
+Todo el directorio `artifacts/` queda fuera de Git. Las capturas pueden contener
+datos del solicitante: son evidencia privada y no se deben publicar. El observador
+no incorpora revision humana/IA continua ni avisos externos por correo/telefono.
