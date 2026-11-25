@@ -64,9 +64,19 @@ La validación TLS permanece activa en el monitor.
 
 - Pausa predeterminada de **120 s** entre consultas completadas; mínimo de 85 s,
   incluso al cambiar de ronda u oficina. `--pausa=SEGUNDOS` permite aumentarla.
-- `Retry-After` puede prolongar la espera. Hay retroceso adaptativo y se entrega
-  el control tras tres fallos consecutivos. No se reinician sesiones para evitar
-  rechazos o límites del portal.
+- `Retry-After` puede prolongar cualquier espera. Tras tres fallos consecutivos
+  (rechazo o error temporal), entra en una pausa de **15 min** y hace una sola
+  consulta de prueba en la misma sesión. Si sigue bloqueado, espera **30 min**,
+  luego **60 min**; las siguientes pausas siguen en 60 min. Un `Retry-After` más
+  largo siempre prevalece. No se borran cookies ni caché ni se recrea el navegador.
+- Una consulta normal tras la pausa reanuda automáticamente la vigilancia y
+  reinicia la progresión de pausas. Windows recibe avisos al pausar y al recuperar
+  el servicio; la consola registra `enfriamiento`/`reanudado`, `waitSeconds` y
+  `retryAt` (UTC). La fecha indica el momento más temprano previsto para reintentar.
+- Cerrar la ventana o pulsar Ctrl+C interrumpe la pausa inmediatamente. CAPTCHA
+  no resuelto, sesión caducada o página desconocida siguen requiriendo revisión.
+  `--una-consulta`, `--max-consultas` y el límite de investigación siguen vigentes:
+  no se hacen reintentos fuera de esos límites.
 - `--solo-cualquiera` consulta únicamente «Cualquier oficina». Sin esa opción,
   recorre oficinas e intercala «Cualquier oficina» cada cinco oficinas.
 - `--desde=OFICINA` reanuda desde una coincidencia única. Combinado con

@@ -21,36 +21,48 @@ async function main() {
   const journal = path.join(dir, `research-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`);
   const began = Date.now();
   // Carry the cooldown across separate invocations of this research runner.
-  let completedAt = 0;
+  let completedAt = 0, nextAllowedAt = 0;
   for (const name of fs.readdirSync(dir).filter(name => /^research-.*\.jsonl$/.test(name))) {
     for (const line of fs.readFileSync(path.join(dir, name), 'utf8').split('\n')) {
       try {
         const record = JSON.parse(line);
         const time = Date.parse(record.time);
-        if (record.result !== 'navegaci\u00f3n' && Number.isFinite(time) && time <= Date.now()) completedAt = Math.max(completedAt, time);
+        if (record.result !== 'navegaci\u00f3n' && Number.isFinite(time) && time <= Date.now()) {
+          completedAt = Math.max(completedAt, time);
+          const scheduled = Date.parse(record.retryAt);
+          if (Number.isFinite(scheduled)) nextAllowedAt = Math.max(nextAllowedAt, scheduled);
+        }
       } catch { /* Ignore partial or malformed local records. */ }
     }
   }
   const authModes = args.includes('--sin-certificado') ? [false] : args.includes('--solo-certificado') ? [true] : [false, true];
   const cases = (selectedBrowser ? [selectedBrowser] : ['firefox', 'chrome', 'seleniumbase']).flatMap(browser => authModes.map(certificate => [browser, certificate]));
+  const recordResult = record => {
+    const scheduled = Date.parse(record.retryAt);
+    if (Number.isFinite(scheduled)) nextAllowedAt = Math.max(nextAllowedAt, scheduled);
+    const line = JSON.stringify(safeRecord(record));
+    fs.appendFileSync(journal, line + '\n');
+    console.log(line);
+  };
   if (smoke) {
-    const wait = Math.max(0, completedAt + 120000 - Date.now());
+    const wait = Math.max(0, completedAt + 120000 - Date.now(), nextAllowedAt - Date.now());
+    if (Date.now() + wait - began >= 45 * 60000) { console.log('Limite de investigacion alcanzado.'); return; }
     if (wait) await sleep(wait);
     await runMonitor({ ...options(['--browser=seleniumbase', '--certificado', '--solo-cualquiera', '--max-consultas=3']), deadline: began + 45 * 60000 }, {
-      output(record) { const line = JSON.stringify(safeRecord(record)); fs.appendFileSync(journal, line + '\n'); console.log(line); },
+      output: recordResult,
     });
     console.log('Prueba periodica terminada; tres intentos como maximo en una misma sesion.');
     return;
   }
   for (const [browser, certificate] of cases) {
     for (let i = 0; i < repeats; i++) {
-      const wait = Math.max(0, completedAt + 120000 - Date.now());
+      const wait = Math.max(0, completedAt + 120000 - Date.now(), nextAllowedAt - Date.now());
       if (Date.now() + wait - began >= 45 * 60000) { console.log('Límite de investigación alcanzado.'); return; }
       if (wait) await sleep(wait);
       let handedOff = false;
       const opts = { ...options([`--browser=${browser}`, '--una-consulta']), certificate, deadline: began + 45 * 60000 };
       const result = await runMonitor(opts, {
-        output(record) { const line = JSON.stringify(safeRecord(record)); fs.appendFileSync(journal, line + '\n'); console.log(line); },
+        output: recordResult,
         async holdForUser(...args) { handedOff = true; await holdForUser(...args); },
       });
       completedAt = Date.now();

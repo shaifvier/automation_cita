@@ -88,7 +88,7 @@ One gap between separately launched early probes was shorter than the planned
 120 seconds. The research runner was then changed to recover its cooldown from
 previous local journals. This observation is not evidence of a tolerated portal
 request rate. Normal monitoring defaults to 120 seconds, enforces an 85-second
-minimum, honors Retry-After, and stops for review after repeated failures.
+minimum, honors Retry-After, and enters an extended cooldown after repeated failures.
 
 ## Monitor behavior and validation
 
@@ -114,17 +114,43 @@ minimum, honors Retry-After, and stops for review after repeated failures.
 
 Validation completed:
 
-- **35 Node tests**: classification, response codes, timing/Retry-After, action
+- **43 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
-- **4 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
-  mTLS handshake. All flows use local fixtures and synthetic identities. The
+- **5 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
+  mTLS handshake, plus a real-browser HTTP 429 recovery fixture. All flows use local fixtures and synthetic identities. The
   booking sentinel received **zero requests**. The certificate-entry fixture
   includes whitespace in the input button's accessible name.
 - **2 Python tests**: worker timeout/failure behavior and subprocess argument/data
   boundaries. Browser integration also exercises the actual worker process.
 - The mTLS fixture accepts a self-signed **server** certificate only inside the
   test. Production certificate validation remains enabled.
+
+## Automatic recovery update
+
+The monitor now enters a 15-minute cooldown after three consecutive rejections
+or temporary failures. It makes one availability-check attempt in the existing
+browser session; another failure extends the cooldown to 30 minutes, then
+60 minutes, capped there. A longer numeric or HTTP-date Retry-After takes
+precedence over that cap. A successful check restores regular polling and resets
+the cooldown progression. These defaults are an operating policy, not a measured
+ICP+ unblock time.
+
+Windows receives pause/recovery notifications. JSON records add `waitSeconds`
+and `retryAt` (UTC), with `enfriamiento` and `reanudado` transition events. Closing
+the browser or Ctrl+C interrupts the wait. Cookies, cache, applicant identity,
+client certificate configuration and the pending office remain in the same
+session. CAPTCHA, unknown-page and expired-session handoff still stop automation.
+Bounded runs stop at their attempt/deadline limits; the research runner carries
+recorded retry deadlines across cases and later invocations.
+
+Recovery was tested with a simulated clock and a local HTTP server returning
+three 429 responses followed by a normal appointment-check flow. A real Chrome
+context retained its synthetic session cookie through all four attempts; its
+booking sentinel received zero requests. Additional tests cover repeated failed
+probes, long/date Retry-After, episode reset, notifications, cancellation and
+research deadlines. We did not deliberately cause a live ICP+ block to test this
+change. The earlier live observations above remain the evidence for portal access.
 
 ## Limits and next evidence needed
 

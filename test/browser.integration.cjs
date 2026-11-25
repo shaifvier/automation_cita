@@ -7,12 +7,18 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { options, runMonitor } = require('../cita-regreso.cjs');
 const { launchSession, certificateOptions } = require('../lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('../lib/portal.cjs');
 
 async function fixture() {
-  let final = 'available', reservations = 0, validations = 0, certificateLabel = ' Access   eIdentifier ';
+  let final = 'available', reservations = 0, validations = 0, certificateLabel = ' Access   eIdentifier ', blocks = 0;
+  const cookies = [];
   const server = http.createServer((req, res) => {
+    if (req.url === '/') {
+      cookies.push(req.headers.cookie || '');
+      if (blocks-- > 0) { res.writeHead(429, { 'Retry-After': '1' }); res.end('Too many requests'); return; }
+    }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     let body;
     switch (req.url) {
@@ -34,7 +40,7 @@ async function fixture() {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return { entry: `http://127.0.0.1:${server.address().port}/`, setFinal: value => { final = value; }, setCertificateLabel: value => { certificateLabel = value; },
-    counts: () => ({ reservations, validations }), close: () => new Promise(resolve => server.close(resolve)) };
+    setBlocks: value => { blocks = value; }, counts: () => ({ reservations, validations, cookies: [...cookies] }), close: () => new Promise(resolve => server.close(resolve)) };
 }
 
 for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
@@ -103,4 +109,33 @@ test('SeleniumBase CDP: encrypted PEM context presents a client certificate', { 
     for (const file of [cert, key, pass, config]) fs.unlinkSync(file);
     fs.rmdirSync(dir);
   }
+});
+
+test('rate-limit recovery retains actual browser cookies and stops before booking', { timeout: 60000 }, async () => {
+  const site = await fixture();
+  site.setBlocks(3); site.setFinal('unavailable');
+  let clock = Date.now(), launches = 0;
+  const waits = [], notifications = [];
+  try {
+    const result = await runMonitor(options(['--browser=chrome', '--solo-cualquiera', '--max-consultas=4']), {
+      readIdentity: async () => ({ nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' }),
+      launchSession: async mode => {
+        launches++;
+        const session = await launchSession(mode);
+        await session.context.addCookies([{ name: 'probe-session', value: 'synthetic-retained-cookie', url: site.entry }]);
+        return session;
+      },
+      createPortal: (session, opts) => createPortal(session, { ...opts, entry: site.entry, stepDelayMs: 0, sleep: async () => {} }),
+      now: () => clock, sleep: async ms => { waits.push(ms); clock += ms; },
+      output: () => {}, notify: async kind => notifications.push(kind),
+    });
+    assert.equal(result.checks, 4);
+    assert.deepEqual(waits, [130000, 130000, 900000]);
+    assert.deepEqual(notifications, ['enfriamiento', 'reanudado']);
+    assert.equal(launches, 1);
+    assert.equal(site.counts().cookies.length, 4);
+    assert.ok(site.counts().cookies.every(cookie => cookie.includes('probe-session=synthetic-retained-cookie')));
+    assert.equal(site.counts().reservations, 0);
+    assert.equal(site.counts().validations, 1);
+  } finally { await site.close(); }
 });

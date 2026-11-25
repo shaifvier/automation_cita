@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createInterface } = require('node:readline/promises');
 const { setTimeout: pause } = require('node:timers/promises');
-const { intervalMs, retryAfterMs, backoffDelay, safeRecord, redact } = require('./lib/core.cjs');
+const { intervalMs, retryAfterMs, backoffDelay, cooldownDelay, safeRecord, redact } = require('./lib/core.cjs');
 const { certificateOptions, launchSession } = require('./lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('./lib/portal.cjs');
 const { notify } = require('./lib/notify.cjs');
@@ -88,23 +88,40 @@ function officeQueue(offices, opts, excluded, round) {
 async function runMonitor(opts, dependencies = {}) {
   const identity = opts.diagnostic ? {} : await (dependencies.readIdentity || readIdentity)();
   const secrets = [identity.nie, identity.name, ...(identity.name || '').split(/\s+/)].filter(s => s && s.length > 2);
+  const now = dependencies.now || Date.now;
+  const sendNotification = dependencies.notify || ((kind, office, details) => notify(kind, office, undefined, details));
+  const signalStatus = async (kind, office, details) => {
+    if (!opts.diagnostic) { try { await sendNotification(kind, office, details); } catch { /* A notification failure must not stop recovery. */ } }
+  };
   const output = dependencies.output || (record => console.log(JSON.stringify(record)));
-  const report = (state, office = ANY_OFFICE) => output(safeRecord({ time: new Date().toISOString(),
+  const report = (state, office = ANY_OFFICE) => output(safeRecord({ time: new Date(now()).toISOString(),
     browser: opts.browser, authentication: opts.certificate ? 'certificado' : 'sin Cl@ve',
     office: redact(office, secrets), stage: state.stage, httpStatus: state.httpStatus,
-    result: state.result, code: state.code, reason: state.reason }));
+    result: state.result, code: state.code, reason: state.reason, waitSeconds: state.waitSeconds, retryAt: state.retryAt }));
   const contextOptions = opts.certificate ? (dependencies.certificateOptions || certificateOptions)() : {};
   const session = await (dependencies.launchSession || launchSession)(opts.browser, contextOptions);
   const controller = new AbortController();
   const onInterrupt = () => controller.abort();
   process.once('SIGINT', onInterrupt); process.once('SIGTERM', onInterrupt);
-  const sleep = dependencies.sleep || (ms => pause(ms, undefined, { signal: controller.signal }));
+  session.page?.once('close', onInterrupt); session.browser?.once('disconnected', onInterrupt);
+  const removeStopListeners = () => {
+    process.off('SIGINT', onInterrupt); process.off('SIGTERM', onInterrupt);
+    session.page?.off('close', onInterrupt); session.browser?.off('disconnected', onInterrupt);
+  };
+  const sleep = dependencies.sleep || (async ms => {
+    // Chunk long Retry-After waits to avoid overflowing Node's timer limit.
+    while (ms > 0) {
+      const chunk = Math.min(ms, 60_000);
+      await pause(chunk, undefined, { signal: controller.signal });
+      ms -= chunk;
+    }
+  });
   let portal;
   try {
     portal = (dependencies.createPortal || createPortal)(session, { diagnostic: opts.diagnostic,
       certificate: opts.certificate, identity, sleep, onNavigation: opts.trace ? report : undefined });
   } catch {
-    process.off('SIGINT', onInterrupt); process.off('SIGTERM', onInterrupt);
+    removeStopListeners();
     await session.close();
     throw new Error('No se pudo preparar el flujo de consulta.');
   }
@@ -120,7 +137,7 @@ async function runMonitor(opts, dependencies = {}) {
   let queue = [], round = 0, checks = 0, resume = opts.resume;
   try {
     while (portal.alive() && !controller.signal.aborted && checks < opts.maxChecks) {
-      if (opts.deadline && Date.now() + delay >= opts.deadline) return { checks, result: 'limite de investigacion' };
+      if (opts.deadline && now() + delay >= opts.deadline) return { checks, result: 'limite de investigacion' };
       if (delay) await sleep(delay);
       if (!portal.alive() || controller.signal.aborted) break;
       let label = queue[0] || ANY_OFFICE;
@@ -137,6 +154,15 @@ async function runMonitor(opts, dependencies = {}) {
         state = await portal.handleChallenge();
       }
       checks++;
+      const failed = ['rechazo', 'fallo temporal'].includes(state.result);
+      if (failed) {
+        if (state.httpStatus === 429 && failures === 0) interval = Math.min(Math.max(interval, 85_000) + 10_000, Math.max(opts.interval, 150_000));
+        const retryAfter = retryAfterMs(state.retryAfter, now());
+        failures++;
+        delay = failures >= 3 ? cooldownDelay(failures - 3, interval, retryAfter) : backoffDelay(failures - 1, interval, retryAfter);
+        cleanStreak = 0;
+        state = { ...state, waitSeconds: Math.ceil(delay / 1000), retryAt: new Date(now() + delay).toISOString() };
+      }
       report(state, label);
       const handoff = ['posible disponibilidad', 'captcha', 'revisión', 'sesión caducada'].includes(state.result);
       if (handoff) {
@@ -144,15 +170,17 @@ async function runMonitor(opts, dependencies = {}) {
         if (!opts.diagnostic) await (dependencies.holdForUser || holdForUser)(session, portal, state.result, label, { signal: controller.signal });
         return { checks, result: state.result };
       }
-      if (['rechazo', 'fallo temporal'].includes(state.result)) {
-        if (state.httpStatus === 429 && failures === 0) interval = Math.min(Math.max(interval, 85_000) + 10_000, Math.max(opts.interval, 150_000));
-        delay = backoffDelay(failures++, interval, retryAfterMs(state.retryAfter));
-        cleanStreak = 0;
-        if (failures >= 3) {
-          if (!opts.diagnostic) await (dependencies.holdForUser || holdForUser)(session, portal, 'rechazo', label, { signal: controller.signal });
-          return { checks, result: 'rechazo persistente' };
+      if (failed) {
+        const canRetry = checks < opts.maxChecks && (!opts.deadline || now() + delay < opts.deadline);
+        if (failures >= 3 && canRetry) {
+          report({ ...state, stage: 'cooldown', result: 'enfriamiento', reason: 'repeated_failures' }, label);
+          await signalStatus('enfriamiento', label, { waitSeconds: state.waitSeconds });
         }
       } else {
+        if (failures >= 3) {
+          report({ stage: 'monitor', httpStatus: state.httpStatus, result: 'reanudado' }, label);
+          await signalStatus('reanudado', label);
+        }
         failures = 0;
         if (++cleanStreak >= 10) { interval = Math.max(opts.interval, interval - 5000); cleanStreak = 0; }
         delay = interval;
@@ -165,13 +193,13 @@ async function runMonitor(opts, dependencies = {}) {
         }
       }
     }
-    return { checks, result: 'completado' };
+    return { checks, result: controller.signal.aborted || !portal.alive() ? 'detenido' : 'completado' };
   } catch (error) {
     if (controller.signal.aborted || !portal.alive()) return { checks, result: 'detenido' };
     // Exceptions may contain URLs, request bodies or certificate paths.
     throw new Error('Monitor detenido por un fallo interno. No se ha continuado la consulta.');
   } finally {
-    process.off('SIGINT', onInterrupt); process.off('SIGTERM', onInterrupt);
+    removeStopListeners();
     await session.close();
   }
 }

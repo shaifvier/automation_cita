@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { classify, codeOf, intervalMs, retryAfterMs, backoffDelay, assertAction, safeRecord, redact } = require('../lib/core.cjs');
+const { classify, codeOf, intervalMs, retryAfterMs, backoffDelay, cooldownDelay, assertAction, safeRecord, redact } = require('../lib/core.cjs');
 const { options, runMonitor, readIdentity, officeQueue, holdForUser } = require('../cita-regreso.cjs');
 const { notification, notify } = require('../lib/notify.cjs');
 const { certificateOptions, helperEnvironment } = require('../lib/browser.cjs');
@@ -63,8 +63,9 @@ test('placeholders and certificate errors never echo input', async () => {
   assert.throws(() => certificateOptions({ CITA_KEY_PEM: 'PRIVATE-PATH' }), error => !error.message.includes('PRIVATE-PATH'));
 });
 test('notifications distinguish availability, review, challenge and test', async () => {
-  const titles = ['posible disponibilidad', 'revisión', 'captcha', 'prueba'].map(kind => notification(kind).title);
-  assert.equal(new Set(titles).size, 4);
+  const titles = ['posible disponibilidad', 'revisión', 'captcha', 'prueba', 'enfriamiento', 'reanudado'].map(kind => notification(kind).title);
+  assert.equal(new Set(titles).size, 6);
+  assert.match(notification('enfriamiento', 'Barcelona', { waitSeconds: 3600 }).message, /60 min/);
   assert.equal(await notify('prueba', undefined, { notify: (_, callback) => callback(null) }), true);
   assert.equal(await notify('prueba', undefined, { notify: () => { throw new Error(); } }), false);
 });
@@ -74,16 +75,21 @@ test('resume and office interleaving', () => {
 });
 
 function harness(states, opts = {}) {
-  let index = 0, closed = false, solved = 0, held = 0, reads = 0;
-  const waits = [], records = [];
+  let index = 0, closed = false, solved = 0, held = 0, reads = 0, launches = 0;
+  let clock = Date.now();
+  const waits = [], records = [], notifications = [];
+  const page = new EventEmitter(), browser = new EventEmitter();
   const portal = { alive: () => !closed, open: async () => ({ result: 'ok' }), offices: async () => ['Cualquier oficina'],
     checkOffice: async () => ({ stage: 'selection', httpStatus: 200, ...states[index++] }),
     handleChallenge: async () => { solved++; return { result: 'captcha' }; } };
-  return { waits, records, result: () => ({ closed, solved, held, reads }),
+  return { waits, records, notifications, result: () => ({ closed, solved, held, reads, launches }),
     run: () => runMonitor({ ...options(['--solo-cualquiera', '--max-consultas=3']), ...opts }, {
       readIdentity: async () => { reads++; return { nie: 'X0000000X', name: 'PRIVATE NAME' }; },
-      launchSession: async () => ({ close: async () => { closed = true; } }),
-      createPortal: () => portal, sleep: async ms => waits.push(ms), output: record => records.push(record),
+      launchSession: async () => { launches++; return { page, browser, close: async () => { closed = true; } }; },
+      createPortal: () => portal, now: () => clock,
+      sleep: async ms => { waits.push(ms); clock += ms; if (opts.interruptCooldown && ms >= 900000) process.emit('SIGINT'); if (opts.closeDuringCooldown && ms >= 900000) page.emit('close'); },
+      notify: async (kind, office, details) => { notifications.push({ kind, office, ...details }); if (opts.failNotifications) throw new Error('synthetic failure'); },
+      output: record => records.push(record),
       holdForUser: async () => { held++; },
     }) };
 }
@@ -105,11 +111,74 @@ test('unknown page and certificate expiry stop rather than retry authentication'
 test('unresolved challenge is handed off', async () => {
   const h = harness([{ result: 'captcha' }]); await h.run(); assert.equal(h.result().solved, 1); assert.equal(h.result().held, 1);
 });
-test('Retry-After is honored and repeated rejection terminates', async () => {
+test('bounded runs still stop at max checks, with no cooldown notification or handoff', async () => {
   const h = harness(Array(3).fill({ result: 'rechazo', httpStatus: 429, retryAfter: '600' }));
-  assert.equal((await h.run()).result, 'rechazo persistente'); assert.deepEqual(h.waits, [600000, 600000]);
-  assert.equal(h.result().held, 1);
+  assert.equal((await h.run()).result, 'completado'); assert.deepEqual(h.waits, [600000, 600000]);
+  assert.equal(h.result().held, 0); assert.deepEqual(h.notifications, []);
 });
+
+test('three failures enter cooldown and a successful single probe resumes the same session', async () => {
+  const h = harness([...Array(3).fill({ result: 'rechazo', httpStatus: 429 }), { result: 'sin citas' }, { result: 'sin citas' }], { maxChecks: 5 });
+  assert.equal((await h.run()).result, 'completado');
+  assert.deepEqual(h.waits, [130000, 130000, 900000, 130000]);
+  assert.deepEqual(h.notifications.map(n => n.kind), ['enfriamiento', 'reanudado']);
+  const cooldown = h.records.find(r => r.result === 'enfriamiento');
+  assert.equal(cooldown.waitSeconds, 900);
+  assert.equal(Date.parse(cooldown.retryAt) - Date.parse(cooldown.time), 900000);
+  assert.equal(h.result().launches, 1); assert.equal(h.result().held, 0);
+});
+
+test('failed cooldown probes double the delay up to an hour and honor longer Retry-After', async () => {
+  const h = harness([...Array(6).fill({ result: 'rechazo', httpStatus: 429 }), { result: 'rechazo', httpStatus: 429, retryAfter: '7200' }, { result: 'sin citas' }], { maxChecks: 8 });
+  await h.run();
+  assert.deepEqual(h.waits, [130000, 130000, 900000, 1800000, 3600000, 3600000, 7200000]);
+  assert.equal(h.result().launches, 1);
+  assert.deepEqual(h.notifications.map(n => n.kind), [...Array(5).fill('enfriamiento'), 'reanudado']);
+});
+
+test('HTTP-date Retry-After is honored at the cooldown transition', async () => {
+  const retryAfter = new Date(Date.now() + 3 * 60 * 60000).toUTCString();
+  const h = harness([{ result: 'rechazo', httpStatus: 429 }, { result: 'rechazo', httpStatus: 429 }, { result: 'rechazo', httpStatus: 429, retryAfter }, { result: 'sin citas' }], { maxChecks: 4 });
+  await h.run();
+  assert.equal(h.waits[0], 130000); assert.ok(h.waits[2] > 10000000);
+  assert.equal(h.notifications[0].waitSeconds, Math.ceil(h.waits[2] / 1000));
+});
+
+test('a new failure episode restarts at the initial cooldown after recovery', async () => {
+  const failed = { result: 'fallo temporal', httpStatus: 503 };
+  const h = harness([failed, failed, failed, { result: 'sin citas' }, failed, failed, failed, { result: 'sin citas' }], { maxChecks: 8 });
+  await h.run();
+  assert.deepEqual(h.waits, [120000, 120000, 900000, 120000, 120000, 120000, 900000]);
+  assert.deepEqual(h.notifications.map(n => n.kind), ['enfriamiento', 'reanudado', 'enfriamiento', 'reanudado']);
+});
+
+test('CAPTCHA or unknown page after cooldown still hands off without announcing recovery', async () => {
+  for (const result of ['captcha', 'revisión', 'sesión caducada', 'posible disponibilidad']) {
+    const h = harness([...Array(3).fill({ result: 'rechazo', httpStatus: 403 }), { result }], { maxChecks: 5 });
+    await h.run(); assert.equal(h.result().held, 1);
+    assert.deepEqual(h.waits, [120000, 120000, 900000]);
+    assert.deepEqual(h.notifications.map(n => n.kind), ['enfriamiento']);
+    assert.equal(h.result().launches, 1);
+  }
+});
+
+test('cooldown is interruptible and notification failures do not stop recovery', async () => {
+  const states = [...Array(3).fill({ result: 'rechazo', httpStatus: 429 }), { result: 'sin citas' }];
+  const interrupted = harness(states, { maxChecks: 4, interruptCooldown: true });
+  assert.equal((await interrupted.run()).result, 'detenido');
+  assert.equal(interrupted.records.filter(r => r.stage === 'selection').length, 3);
+  assert.equal(interrupted.result().closed, true);
+  const failedNotice = harness(states, { maxChecks: 4, failNotifications: true });
+  assert.equal((await failedNotice.run()).result, 'completado');
+  assert.equal(failedNotice.records.filter(r => r.stage === 'selection').length, 4);
+});
+
+test('research deadline prevents entering a cooldown it cannot complete', async () => {
+  const h = harness(Array(3).fill({ result: 'rechazo', httpStatus: 429 }), { maxChecks: 4, deadline: Date.now() + 600000 });
+  assert.equal((await h.run()).result, 'limite de investigacion');
+  assert.deepEqual(h.waits, [130000, 130000]); assert.deepEqual(h.notifications, []);
+});
+
 test('diagnostic never reads applicant details', async () => {
   const h = harness([{ result: 'formulario disponible' }], { diagnostic: true, maxChecks: 1 });
   await h.run(); assert.equal(h.result().reads, 0);
@@ -143,4 +212,11 @@ test('research deadline stops before a Retry-After exceeding the remaining budge
   const h = harness([{ result: 'rechazo', httpStatus: 429, retryAfter: '7200' }], { deadline: Date.now() + 1000 });
   assert.equal((await h.run()).result, 'limite de investigacion');
   assert.deepEqual(h.waits, []); assert.equal(h.records.length, 1); assert.equal(h.result().closed, true);
+});
+
+test('closing the browser page interrupts cooldown without another probe', async () => {
+  const h = harness([...Array(3).fill({ result: 'rechazo', httpStatus: 429 }), { result: 'sin citas' }], { maxChecks: 4, closeDuringCooldown: true });
+  assert.equal((await h.run()).result, 'detenido');
+  assert.equal(h.records.filter(r => r.stage === 'selection').length, 3);
+  assert.equal(h.result().closed, true);
 });
