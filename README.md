@@ -151,6 +151,8 @@ legibles usan Europe/Madrid. Son muestras del estado del navegador, no recuentos
 de consultas ni pruebas de la hora exacta de apertura de una cita. Una pantalla
 con posibles opciones de cita se conserva como captura PNG privada para revision.
 El monitor principal sigue gestionando los avisos de Windows y la entrega manual.
+El informe marca intervalos de mas de 90 s sin observaciones y distingue un
+monitor detenido de uno activo; no permite concluir nada sobre citas en esos huecos.
 
 El observador puede ejecutarse como proceso independiente del chat. En Windows
 mantiene una solicitud temporal para evitar la suspension automatica mientras

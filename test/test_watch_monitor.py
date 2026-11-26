@@ -83,6 +83,21 @@ class ObserverTests(unittest.TestCase):
                 journal.record('no_appointments')
             self.assertEqual(len((Path(directory) / 'observations.jsonl').read_text().splitlines()), 1)
 
+    def test_report_marks_stopped_monitor_and_unobserved_intervals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            rows = [
+                {'source': 'read_only_browser_observer', 'status': 'no_appointments', 'code': None, 'observedAt': '2026-11-26T06:25:00+00:00', 'observedAtMadrid': '2026-11-26T07:25:00+01:00'},
+                {'source': 'read_only_browser_observer', 'status': 'monitor_stopped', 'code': None, 'observedAt': '2026-11-26T07:44:00+00:00', 'observedAtMadrid': '2026-11-26T08:44:00+01:00'},
+            ]
+            (Path(directory) / 'observations.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+            journal = watch.Journal(directory, 123)
+            journal.write_report()
+            self.assertEqual(journal.gaps[0]['seconds'], 4740)
+            report = (Path(directory) / 'report.md').read_text(encoding='utf-8')
+            self.assertIn('has stopped', report)
+            self.assertIn('Availability cannot be established', report)
+            self.assertIn('4740 seconds', report)
+
     def run_probe(self, directory, capture_fails=False):
         socket = FakeSocket(capture_fails)
         endpoint = json.dumps({'webSocketDebuggerUrl': 'ws://127.0.0.1:12345/devtools/browser/synthetic'}).encode()

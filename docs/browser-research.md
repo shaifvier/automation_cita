@@ -215,8 +215,9 @@ This does not override manual sleep, lid closure, shutdown, or sign-in policies.
 Primary monitoring/Windows alerts remain with the existing Node process; the
 observer is automatic documentation, not continuous human or AI review.
 
-Six observer tests cover host restrictions, expiry/form classification, report
+Seven observer tests cover host restrictions, expiry/form classification, report
 history and Madrid timestamps, locked-report resilience, allowed read-only CDP
-methods, and retaining candidate observations when screenshot capture fails.
+methods, retaining candidate observations when screenshot capture fails, and
+explicitly reporting coverage gaps and stopped monitor runs.
 No live appointment was selected to test capture. Overnight reports and images
 remain under ignored `artifacts/`; they are not part of the public research data.

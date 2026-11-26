@@ -84,6 +84,7 @@ class Journal:
         self.started = datetime.now(timezone.utc).isoformat()
         self.counts = Counter()
         self.events = []
+        self.gaps = []
         self.candidates = []
         self.previous = None
         self.previous_code = None
@@ -102,6 +103,10 @@ class Journal:
                 self.started = self.events[0]['observedAt']
 
     def _remember(self, row):
+        if self.last:
+            elapsed = (datetime.fromisoformat(row['observedAt']) - datetime.fromisoformat(self.last['observedAt'])).total_seconds()
+            if elapsed > 90:
+                self.gaps.append({'from': self.last['observedAtMadrid'], 'to': row['observedAtMadrid'], 'seconds': round(elapsed)})
         status, code = row['status'], row.get('code')
         self.counts[status] += 1
         if status != self.previous or code != self.previous_code or row.get('evidence'):
@@ -120,12 +125,14 @@ class Journal:
                'status': status, 'code': code, 'evidence': evidence, 'keepAwake': keep_awake}
         with (self.directory / 'observations.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps(row, ensure_ascii=True) + '\n')
+        if self.last is None:
+            self.started = row['observedAt']
         self._remember(row)
         # A report viewer may briefly hold a file open on Windows. The append-only
         # journal remains the source of truth if a derived-file refresh is locked.
         with suppress(OSError):
             atomic_json(self.directory / 'status.json', {'observerPid': psutil.Process().pid, 'startedAt': self.started,
-                'latest': row, 'observationCounts': dict(self.counts), 'potentialAvailabilityEvents': self.candidates})
+                'latest': row, 'observationCounts': dict(self.counts), 'observationGaps': self.gaps, 'potentialAvailabilityEvents': self.candidates})
         with suppress(OSError):
             self.write_report()
 
@@ -135,7 +142,8 @@ class Journal:
             f"Latest observation (Europe/Madrid): **{self.last['observedAtMadrid']}**",
             f"Current browser state: **{self.last['status']}**",
             f"Potential availability events recorded: **{len(self.candidates)}**", '',
-            'The primary monitor continues its existing polling, Windows alerts, cooldown and expiry recovery.',
+            ('The observed monitor has stopped; this report is closed.' if self.last['status'] == 'monitor_stopped'
+             else 'The primary monitor controls polling, Windows alerts, cooldown and expiry recovery.'),
             'This observer reads the browser only; samples are NOT counts of portal queries.',
             'Potential availability requires human verification. Nothing is selected or booked.',
             'Screenshots, if present, are private local evidence and may contain applicant details. Do not publish them.', '',
@@ -143,6 +151,10 @@ class Journal:
         for row in self.events[-100:]:
             evidence = f"[Screenshot]({row['evidence']})" if row.get('evidence') else ''
             lines.append(f"| {row['observedAtMadrid']} | {row['status']} | {row.get('code') or ''} | {evidence} |")
+        if self.gaps:
+            lines.extend(['', '## Observation gaps', '', 'Availability cannot be established during these unobserved intervals.', ''])
+            for gap in self.gaps:
+                lines.append(f"- {gap['from']} to {gap['to']}: {gap['seconds']} seconds without an observation.")
         if self.candidates:
             lines.extend(['', '## Potential availability evidence', ''])
             for row in self.candidates:
