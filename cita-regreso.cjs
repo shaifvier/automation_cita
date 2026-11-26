@@ -10,9 +10,10 @@ const { createPortal, ANY_OFFICE } = require('./lib/portal.cjs');
 const { notifyAll } = require('./lib/notify.cjs');
 const { sendTelegram, telegramStatus } = require('./lib/telegram.cjs');
 const { readContact } = require('./lib/contact.cjs');
+const { captureTelegramScreenshot } = require('./lib/screenshot.cjs');
 
 function options(args = process.argv.slice(2)) {
-  const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--probar-telegram', '--telegram', '--help']);
+  const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--probar-telegram', '--telegram', '--telegram-screenshot', '--help']);
   const values = new Set(['--browser', '--pausa', '--desde', '--max-consultas']);
   for (const arg of args) {
     if (!flags.has(arg) && !values.has(arg.split('=')[0])) throw new Error('Opcion desconocida. Usa --help.');
@@ -22,12 +23,13 @@ function options(args = process.argv.slice(2)) {
   const browser = value('--browser') || 'firefox';
   if (!['firefox', 'chrome', 'seleniumbase'].includes(browser)) throw new Error('Navegador inválido.');
   const diagnostic = args.includes('--diagnostico');
+  if (args.includes('--telegram-screenshot') && !args.includes('--telegram')) throw new Error('--telegram-screenshot requiere --telegram.');
   const once = args.includes('--una-consulta');
   const maxChecks = once ? 1 : Number(value('--max-consultas') || (diagnostic ? 1 : Infinity));
   if (maxChecks !== Infinity && (!Number.isInteger(maxChecks) || maxChecks < 1)) throw new Error('Número de consultas inválido.');
   return { browser, diagnostic, once, maxChecks, interval: intervalMs(value('--pausa')),
     onlyAny: args.includes('--solo-cualquiera') || once || diagnostic,
-    certificate: args.includes('--certificado'), trace: args.includes('--red'), telegram: args.includes('--telegram'),
+    certificate: args.includes('--certificado'), trace: args.includes('--red'), telegram: args.includes('--telegram'), telegramScreenshot: args.includes('--telegram-screenshot'),
     resume: value('--desde'), testNotification: args.includes('--probar-aviso'), testTelegram: args.includes('--probar-telegram'), help: args.includes('--help') };
 }
 
@@ -116,7 +118,10 @@ async function runMonitor(opts, dependencies = {}) {
   const contact = opts.diagnostic ? null : (dependencies.readContact || readContact)();
   const secrets = [identity.nie, identity.name, contact?.phone, contact?.email, ...(identity.name || '').split(/\s+/)].filter(s => s && s.length > 2);
   const now = dependencies.now || Date.now;
-  const sendNotification = dependencies.notify || ((kind, office, details) => (dependencies.notifyAll || notifyAll)(kind, office, details, { enableTelegram: opts.telegram }));
+  const sendNotification = dependencies.notify || ((kind, office, details) => (dependencies.notifyAll || notifyAll)(kind, office, details, {
+    enableTelegram: opts.telegram,
+    ...(opts.telegramScreenshot ? { screenshot: () => captureTelegramScreenshot(session.page, { secrets }) } : {}),
+  }));
   const signalStatus = async (kind, office, details) => {
     if (!opts.diagnostic) { try { await sendNotification(kind, office, details); } catch { /* A notification failure must not stop recovery. */ } }
   };
@@ -259,7 +264,7 @@ async function runMonitor(opts, dependencies = {}) {
 async function main() {
   const opts = options();
   if (opts.help) {
-    console.log('node [--env-file=.env] cita-regreso.cjs [--browser=firefox|chrome|seleniumbase] [--certificado] [--una-consulta] [--diagnostico] [--solo-cualquiera] [--desde=OFICINA] [--pausa=120] [--max-consultas=N] [--red] [--telegram] [--probar-aviso] [--probar-telegram]');
+    console.log('node [--env-file=.env] cita-regreso.cjs [--browser=firefox|chrome|seleniumbase] [--certificado] [--una-consulta] [--diagnostico] [--solo-cualquiera] [--desde=OFICINA] [--pausa=120] [--max-consultas=N] [--red] [--telegram] [--telegram-screenshot] [--probar-aviso] [--probar-telegram]');
     return;
   }
   if (opts.testTelegram) {

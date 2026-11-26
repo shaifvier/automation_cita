@@ -58,6 +58,9 @@ node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --certificado --s
 # El mismo monitor con avisos adicionales al móvil por Telegram:
 node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --certificado --solo-cualquiera --telegram
 
+# Añadir también la captura del navegador a cada aviso de entrega manual:
+node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --certificado --solo-cualquiera --telegram --telegram-screenshot
+
 # Diagnóstico público: llega al formulario sin rellenar ni enviar NIE/nombre:
 node .\cita-regreso.cjs --browser=chrome --diagnostico
 ```
@@ -131,6 +134,29 @@ reintenta automáticamente, evitando duplicados cuando el resultado es incierto.
 Los mensajes usan textos fijos y hora de Madrid; no incluyen NIE, nombre,
 teléfono, correo, capturas ni certificados. Las credenciales tampoco se pasan al
 helper de SeleniumBase. Activarlo requiere `--telegram` y ambos valores configurados.
+
+### Captura opcional del navegador
+
+Añade **`--telegram-screenshot` junto con `--telegram`** para recibir también la
+vista del navegador en los avisos de posible disponibilidad o entrega manual.
+El aviso de texto se envía primero; la captura lo sigue como foto con el mismo
+texto en el pie y sin otro sonido de notificación. Las esperas y reintentos
+automáticos no envían imágenes. Sin esta opción, Telegram sigue siendo solo texto.
+
+Se captura únicamente el área visible de la página ICP+ del monitor, sin navegar,
+seleccionar ni reservar. Los campos de texto/contraseña/correo/teléfono y los
+textos que coinciden con los datos privados conocidos se tapan en la captura;
+los valores del formulario no se modifican. Es una protección parcial: otros
+datos de la página podrían seguir visibles y la imagen se envía a Telegram.
+La opción autoriza esa imagen solo al chat privado configurado.
+
+La captura tiene un límite de dos segundos y la subida, de cinco. Si falla
+cualquiera, se mantiene el aviso original de texto. La aplicación no guarda la
+imagen en disco: permanece en memoria para enviarla. No se capturan otros sitios
+ni la ventana de autenticación Cl@ve. Reinicia el monitor para cargar la opción.
+`--probar-telegram` y `--probar-aviso` siguen siendo pruebas de texto sin navegador.
+
+Referencia de imágenes: [Telegram sendPhoto](https://core.telegram.org/bots/api#sendphoto).
 
 «Telegram aceptó el mensaje» significa que su API respondió correctamente; no
 demuestra que el móvil lo mostrara, sonara o lo leyeras. Comprueba la recepción

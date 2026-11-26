@@ -115,10 +115,10 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 
 Validation completed:
 
-- **73 Node tests**: classification, response codes, timing/Retry-After, action
+- **79 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
-- **7 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
+- **8 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
   mTLS handshake, plus real-browser HTTP 429 and expired-request recovery fixtures. All flows use local fixtures and synthetic identities. The
   booking sentinel received **zero requests**. The certificate-entry fixture
   includes whitespace in the input button's accessible name.
@@ -277,7 +277,7 @@ routine cooldown/recovery and automatic request restarts stay on Windows only.
 Contact prefilling starts independently of notification delivery. Each alert is
 one bounded HTTPS request to the fixed Telegram API origin, with redirects
 disabled, a five-second deadline, and no automatic resend on ambiguous failure.
-Only fixed event wording and a Europe/Madrid timestamp are sent. Applicant data,
+By default, only fixed event wording and a Europe/Madrid timestamp are sent. Applicant data,
 office text, screenshots, certificate material, tokens and chat IDs are omitted
 from message text and logs. An API acknowledgement is not proof of phone delivery.
 
@@ -287,7 +287,7 @@ chat ID to ignored `.env` and sends one test. It rejects multiple matching chats
 and concurrent `.env` edits; it never deletes an existing webhook. Setup consumes
 bot updates and should use a dedicated bot without another poller.
 
-Thirteen local Telegram tests cover configuration, payload privacy, event filtering,
+Nineteen local Telegram tests cover configuration, payload privacy, event filtering,
 HTTP/API/network errors, bounded timeout, independent Windows/Telegram delivery,
 nonce-bound recipients, preservation of local settings, concurrent edits, and
 the phone-only CLI without identity, certificates, Windows alerts or a browser.
@@ -301,3 +301,28 @@ their phone. No ICP+ request or booking action was part of that live channel tes
 References: [Telegram sendMessage](https://core.telegram.org/bots/api#sendmessage),
 [getUpdates](https://core.telegram.org/bots/api#getupdates), and
 [private Start links](https://core.telegram.org/bots/features#deep-linking).
+
+## Optional browser screenshots in Telegram
+
+`--telegram-screenshot` requires `--telegram`. Only handoff alerts request a
+capture, in parallel with the original text alert. An accepted text message is
+followed by a silent photo with an event caption; a failed capture or upload does
+not suppress the text or desktop alert. No screenshots accompany routine retries.
+
+The capture uses the current ICP+ page viewport, in-memory JPEG bytes, a two-second
+deadline, and screenshot masks for input fields and known applicant values. The
+page's form values remain intact. Other page details can remain visible, so this
+flag is explicit consent to send the masked view through the configured private
+Telegram chat. Foreign/authentication origins and pages changing during capture
+are skipped. Upload uses multipart `sendPhoto`, no redirects, an eight-MiB local
+limit and the existing five-second request deadline. No image is written to disk
+by the monitor; captions and status logs omit applicant values and image bytes.
+
+Six unit tests cover multipart payloads, text-first delivery, capture/upload failure,
+opt-in gating, masking, origin changes and capture deadlines. A focused local
+Chrome fixture confirms a real JPEG is produced while inputs remain unchanged
+and no reservation request occurs. A separate live Telegram test sent a clearly
+labelled local demonstration image; it did not query or alter an ICP+ session.
+The synthetic demo image remains private under ignored `artifacts/` for review.
+
+Reference: [Telegram sendPhoto](https://core.telegram.org/bots/api#sendphoto).

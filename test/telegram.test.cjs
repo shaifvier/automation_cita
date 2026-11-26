@@ -6,7 +6,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { readTelegramConfig, telegramRequest, sendTelegram, telegramText, telegramStatus } = require('../lib/telegram.cjs');
+const { readTelegramConfig, telegramRequest, sendTelegram, sendTelegramPhoto, telegramText, telegramStatus } = require('../lib/telegram.cjs');
+const { captureTelegramScreenshot } = require('../lib/screenshot.cjs');
 const { notifyAll } = require('../lib/notify.cjs');
 const { findLinkedChat, setupTelegram } = require('../scripts/setup-telegram.cjs');
 const token = '123456789:synthetic_token_for_local_tests_only';
@@ -105,6 +106,92 @@ test('Windows-only mode never calls the Telegram transport, even with saved conf
     }), true);
   }
   assert.equal(desktop, 2); assert.equal(phone, 0);
+});
+
+test('Telegram screenshot is a bounded multipart upload to the private chat with a silent caption', async () => {
+  const image = Buffer.from('synthetic-image');
+  let requests = 0;
+  assert.equal(await sendTelegramPhoto('prueba', image, { env, fetchImpl: async (url, options) => {
+    requests++;
+    assert.equal(url, `https://api.telegram.org/bot${token}/sendPhoto`);
+    assert.ok(options.body instanceof FormData); assert.deepEqual(options.headers, {});
+    assert.equal(options.body.get('chat_id'), env.CITA_TELEGRAM_CHAT_ID);
+    assert.equal(options.body.get('disable_notification'), 'true'); assert.equal(options.body.get('protect_content'), 'true');
+    const file = options.body.get('photo');
+    assert.equal(file.type, 'image/jpeg'); assert.equal(file.name, 'icp-view.jpg');
+    assert.deepEqual(Buffer.from(await file.arrayBuffer()), image);
+    assert.match(options.body.get('caption'), /PRUEBA DE TELEGRAM/);
+    assert.equal(options.body.get('caption').includes(env.CITA_NIE), false);
+    return reply({ message_id: 2 });
+  } }), 'accepted');
+  for (const invalid of [null, Buffer.alloc(0), Buffer.alloc(8 * 1024 * 1024 + 1)]) {
+    assert.equal(await sendTelegramPhoto('prueba', invalid, { env, fetchImpl: () => { requests++; } }), 'failed');
+  }
+  assert.equal(requests, 1);
+});
+
+test('text alert is accepted before a slow screenshot and its photo upload', async () => {
+  const order = [];
+  let completeCapture;
+  const pending = notifyAll('posible disponibilidad', undefined, {}, {
+    enableTelegram: true, windows: async () => true, output: () => {},
+    screenshot: () => new Promise(resolve => { completeCapture = resolve; }),
+    telegram: async () => { order.push('text'); return 'accepted'; },
+    telegramPhoto: async () => { order.push('photo'); return 'accepted'; },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, ['text']);
+  completeCapture(Buffer.from('synthetic'));
+  assert.equal(await pending, true); assert.deepEqual(order, ['text', 'photo']);
+});
+
+test('photo and capture failures preserve the original Windows and Telegram text alerts', async () => {
+  for (const failure of ['capture', 'upload', 'text']) {
+    const messages = [];
+    let textCalls = 0, photoCalls = 0;
+    assert.equal(await notifyAll('revisión', undefined, {}, {
+      enableTelegram: true, windows: async () => true, output: value => messages.push(value),
+      screenshot: async () => { if (failure === 'capture') throw new Error('PRIVATE'); return Buffer.from('synthetic'); },
+      telegram: async () => { textCalls++; return failure === 'text' ? 'failed' : 'accepted'; },
+      telegramPhoto: async () => { photoCalls++; throw new Error(token); },
+    }), true);
+    assert.equal(textCalls, 1); assert.equal(photoCalls, failure === 'upload' ? 1 : 0);
+    assert.equal(messages.join('').includes(token), false); assert.equal(messages.join('').includes('PRIVATE'), false);
+  }
+});
+
+test('disabled photo mode and routine events never capture or upload a browser view', async () => {
+  let captures = 0, photos = 0;
+  const base = { windows: async () => true, output: () => {},
+    screenshot: async () => { captures++; return Buffer.from('synthetic'); },
+    telegramPhoto: async () => { photos++; return 'accepted'; } };
+  await notifyAll('posible disponibilidad', undefined, {}, { ...base, enableTelegram: false });
+  await notifyAll('enfriamiento', undefined, {}, { ...base, enableTelegram: true, telegram: async () => 'skipped' });
+  const { screenshot, ...textOnly } = base;
+  await notifyAll('posible disponibilidad', undefined, {}, { ...textOnly, enableTelegram: true, telegram: async () => 'accepted' });
+  assert.equal(captures, 0); assert.equal(photos, 0);
+});
+
+test('screenshot capture masks fields and literal applicant text without saving to disk', async () => {
+  const masks = [];
+  const page = { url: () => 'https://icp.administracionelectronica.gob.es/selection',
+    locator: selector => { masks.push(selector); return selector; }, getByText: regex => { masks.push(regex); return regex; },
+    screenshot: async options => { assert.equal(options.fullPage, false); assert.equal(options.type, 'jpeg'); assert.equal(options.path, undefined);
+      assert.equal(options.mask.length, 3); assert.equal(options.timeout, 2000); return Buffer.from('synthetic'); },
+  };
+  assert.ok(await captureTelegramScreenshot(page, { secrets: ['SYNTHETIC.NAME', 'synthetic@example.invalid'] }));
+  assert.ok(masks[1].test('SYNTHETIC.NAME')); assert.equal(masks[1].test('SYNTHETICxNAME'), false);
+  assert.equal(await captureTelegramScreenshot({ url: () => 'https://example.invalid/', screenshot: () => assert.fail('Foreign origin captured') }), null);
+});
+
+test('unavailable, changed and stalled browser views fail without delaying the original text indefinitely', async () => {
+  const url = 'https://icp.administracionelectronica.gob.es/selection';
+  const page = { url: () => url, locator: () => ({}), getByText: () => ({}) };
+  assert.equal(await captureTelegramScreenshot({ ...page, screenshot: async () => { throw new Error('PRIVATE'); } }), null);
+  assert.equal(await captureTelegramScreenshot({ ...page, screenshot: () => new Promise(() => {}) }, { timeoutMs: 15 }), null);
+  let changed = false;
+  assert.equal(await captureTelegramScreenshot({ ...page, url: () => changed ? url + '/new' : url,
+    screenshot: async () => { changed = true; return Buffer.from('synthetic'); } }), null);
 });
 
 const update = (id, text, type = 'private', updateId = 1) => ({ update_id: updateId,

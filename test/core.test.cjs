@@ -64,6 +64,8 @@ test('CLI defaults and invalid options', () => {
   assert.equal(options(['--una-consulta']).maxChecks, 1);
   assert.equal(options(['--probar-telegram']).testTelegram, true);
   assert.equal(options([]).telegram, false); assert.equal(options(['--telegram']).telegram, true);
+  assert.equal(options(['--telegram', '--telegram-screenshot']).telegramScreenshot, true);
+  assert.throws(() => options(['--telegram-screenshot']), /requiere --telegram/);
   assert.throws(() => options(['--browser=bad'])); assert.throws(() => options(['--max-consultas=0']));
   assert.throws(() => options(['--unknown'])); assert.throws(() => options(['--browser'])); assert.throws(() => options(['--pausa=']));
 });
@@ -165,7 +167,7 @@ test('potential availability stops immediately and hands off once', async () => 
 });
 
 test('monitor passes the explicit Telegram switch through to its handoff notifier', async () => {
-  for (const flags of [[], ['--telegram']]) {
+  for (const flags of [[], ['--telegram'], ['--telegram', '--telegram-screenshot']]) {
     const calls = [];
     await runMonitor(options(['--solo-cualquiera', ...flags]), {
       readIdentity: async () => ({ nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' }), readContact: () => null,
@@ -176,7 +178,9 @@ test('monitor passes the explicit Telegram switch through to its handoff notifie
       holdForUser: async (session, portal, kind, office, settings) => settings.sendNotification(kind, office),
       output: () => {},
     });
-    assert.deepEqual(calls, [{ kind: 'posible disponibilidad', settings: { enableTelegram: flags.includes('--telegram') } }]);
+    assert.equal(calls.length, 1); assert.equal(calls[0].kind, 'posible disponibilidad');
+    assert.equal(calls[0].settings.enableTelegram, flags.includes('--telegram'));
+    assert.equal(typeof calls[0].settings.screenshot, flags.includes('--telegram-screenshot') ? 'function' : 'undefined');
   }
 });
 test('unknown pages still stop for review', async () => {

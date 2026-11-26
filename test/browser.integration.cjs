@@ -10,6 +10,7 @@ const { execFileSync } = require('node:child_process');
 const { options, runMonitor, holdForUser } = require('../cita-regreso.cjs');
 const { launchSession, certificateOptions } = require('../lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('../lib/portal.cjs');
+const { captureTelegramScreenshot } = require('../lib/screenshot.cjs');
 
 const CONTACT = { phone: '600000001', email: 'synthetic@example.invalid' };
 const contactForm = '<h1>Datos de contacto para la cita</h1><form action="/reserve" method="post"><label for="txtTelefono">Teléfono</label><input id="txtTelefono" type="tel"><label for="emailUNO">Correo electrónico</label><input id="emailUNO" type="email"><label for="emailDOS">Confirmar correo electrónico</label><input id="emailDOS" type="email"><button>Continuar</button></form>';
@@ -157,6 +158,23 @@ test('contact handoff waits for manual navigation, fills once, and leaves submis
       assert.equal((await session.page.evaluate(observerSnapshot)).candidate, false, 'ambiguous duplicate email is not a contact-form candidate');
       assert.equal(site.counts().reservations, 0);
     } finally { controller.abort(); await pending; }
+  } finally { if (session) await session.close(); await site.close(); }
+});
+
+test('Telegram screenshot captures a masked local browser view without submitting or changing values', { timeout: 60000 }, async () => {
+  const site = await fixture();
+  let session;
+  try {
+    session = await launchSession('chrome');
+    await session.page.goto(site.entry + 'contact');
+    await session.page.locator('#txtTelefono').fill(CONTACT.phone);
+    await session.page.locator('#emailUNO').fill(CONTACT.email);
+    await session.page.locator('#emailDOS').fill(CONTACT.email);
+    const image = await captureTelegramScreenshot(session.page, { secrets: [CONTACT.phone, CONTACT.email], origin: new URL(site.entry).origin });
+    assert.ok(Buffer.isBuffer(image)); assert.equal(image.subarray(0, 3).toString('hex'), 'ffd8ff');
+    assert.equal(await session.page.locator('#txtTelefono').inputValue(), CONTACT.phone);
+    assert.equal(await session.page.locator('#emailUNO').inputValue(), CONTACT.email);
+    assert.equal(site.counts().reservations, 0);
   } finally { if (session) await session.close(); await site.close(); }
 });
 
