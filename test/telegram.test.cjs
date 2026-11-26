@@ -79,20 +79,32 @@ test('Windows failure does not suppress Telegram and both transports start indep
   const output = [];
   let phoneCalls = 0, finishWindows;
   const pending = notifyAll('posible disponibilidad', 'PRIVATE-OFFICE', {}, {
+    enableTelegram: true,
     windows: () => new Promise(resolve => { finishWindows = resolve; }),
     telegram: async () => { phoneCalls++; return 'accepted'; }, output: text => output.push(text),
   });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(phoneCalls, 1); assert.equal(output.length, 1); finishWindows(false);
   assert.equal(await pending, false);
-  assert.equal(await notifyAll('prueba', undefined, {}, { windows: async () => { throw new Error('PRIVATE'); },
+  assert.equal(await notifyAll('prueba', undefined, {}, { enableTelegram: true, windows: async () => { throw new Error('PRIVATE'); },
     telegram: async () => { phoneCalls++; return 'accepted'; }, output: () => {} }), false);
   assert.equal(phoneCalls, 2); assert.equal(output.join('').includes('PRIVATE'), false);
 });
 
 test('Telegram failure leaves Windows delivery and handoff intact', async () => {
-  assert.equal(await notifyAll('prueba', undefined, {}, { windows: async () => true,
+  assert.equal(await notifyAll('prueba', undefined, {}, { enableTelegram: true, windows: async () => true,
     telegram: async () => { throw new Error(token); }, output: text => assert.equal(text.includes(token), false) }), true);
+});
+
+test('Windows-only mode never calls the Telegram transport, even with saved configuration', async () => {
+  let desktop = 0, phone = 0;
+  for (const settings of [{}, { enableTelegram: false }]) {
+    assert.equal(await notifyAll('posible disponibilidad', undefined, {}, { ...settings,
+      windows: async () => { desktop++; return true; }, telegram: async () => { phone++; return 'accepted'; },
+      output: () => assert.fail('Disabled phone channel must not report delivery'),
+    }), true);
+  }
+  assert.equal(desktop, 2); assert.equal(phone, 0);
 });
 
 const update = (id, text, type = 'private', updateId = 1) => ({ update_id: updateId,

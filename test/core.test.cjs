@@ -63,6 +63,7 @@ test('CLI defaults and invalid options', () => {
   assert.equal(options([]).browser, 'firefox'); assert.equal(options([]).interval, 120000);
   assert.equal(options(['--una-consulta']).maxChecks, 1);
   assert.equal(options(['--probar-telegram']).testTelegram, true);
+  assert.equal(options([]).telegram, false); assert.equal(options(['--telegram']).telegram, true);
   assert.throws(() => options(['--browser=bad'])); assert.throws(() => options(['--max-consultas=0']));
   assert.throws(() => options(['--unknown'])); assert.throws(() => options(['--browser'])); assert.throws(() => options(['--pausa=']));
 });
@@ -161,6 +162,22 @@ test('three recurring cycles respect interval and close browser', async () => {
 test('potential availability stops immediately and hands off once', async () => {
   const h = harness([{ result: 'posible disponibilidad' }]);
   await h.run(); assert.equal(h.records.length, 1); assert.equal(h.result().held, 1); assert.deepEqual(h.waits, []);
+});
+
+test('monitor passes the explicit Telegram switch through to its handoff notifier', async () => {
+  for (const flags of [[], ['--telegram']]) {
+    const calls = [];
+    await runMonitor(options(['--solo-cualquiera', ...flags]), {
+      readIdentity: async () => ({ nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' }), readContact: () => null,
+      launchSession: async () => ({ page: new EventEmitter(), browser: new EventEmitter(), close: async () => {} }),
+      createPortal: () => ({ alive: () => true, open: async () => ({ result: 'ok' }), offices: async () => ['Cualquier oficina'],
+        checkOffice: async () => ({ result: 'posible disponibilidad' }) }),
+      notifyAll: async (kind, office, details, settings) => { calls.push({ kind, settings }); return true; },
+      holdForUser: async (session, portal, kind, office, settings) => settings.sendNotification(kind, office),
+      output: () => {},
+    });
+    assert.deepEqual(calls, [{ kind: 'posible disponibilidad', settings: { enableTelegram: flags.includes('--telegram') } }]);
+  }
 });
 test('unknown pages still stop for review', async () => {
   for (const result of ['revisión']) {

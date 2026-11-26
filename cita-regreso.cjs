@@ -12,7 +12,7 @@ const { sendTelegram, telegramStatus } = require('./lib/telegram.cjs');
 const { readContact } = require('./lib/contact.cjs');
 
 function options(args = process.argv.slice(2)) {
-  const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--probar-telegram', '--help']);
+  const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--probar-telegram', '--telegram', '--help']);
   const values = new Set(['--browser', '--pausa', '--desde', '--max-consultas']);
   for (const arg of args) {
     if (!flags.has(arg) && !values.has(arg.split('=')[0])) throw new Error('Opcion desconocida. Usa --help.');
@@ -27,7 +27,7 @@ function options(args = process.argv.slice(2)) {
   if (maxChecks !== Infinity && (!Number.isInteger(maxChecks) || maxChecks < 1)) throw new Error('Número de consultas inválido.');
   return { browser, diagnostic, once, maxChecks, interval: intervalMs(value('--pausa')),
     onlyAny: args.includes('--solo-cualquiera') || once || diagnostic,
-    certificate: args.includes('--certificado'), trace: args.includes('--red'),
+    certificate: args.includes('--certificado'), trace: args.includes('--red'), telegram: args.includes('--telegram'),
     resume: value('--desde'), testNotification: args.includes('--probar-aviso'), testTelegram: args.includes('--probar-telegram'), help: args.includes('--help') };
 }
 
@@ -116,7 +116,7 @@ async function runMonitor(opts, dependencies = {}) {
   const contact = opts.diagnostic ? null : (dependencies.readContact || readContact)();
   const secrets = [identity.nie, identity.name, contact?.phone, contact?.email, ...(identity.name || '').split(/\s+/)].filter(s => s && s.length > 2);
   const now = dependencies.now || Date.now;
-  const sendNotification = dependencies.notify || ((kind, office, details) => notifyAll(kind, office, details));
+  const sendNotification = dependencies.notify || ((kind, office, details) => (dependencies.notifyAll || notifyAll)(kind, office, details, { enableTelegram: opts.telegram }));
   const signalStatus = async (kind, office, details) => {
     if (!opts.diagnostic) { try { await sendNotification(kind, office, details); } catch { /* A notification failure must not stop recovery. */ } }
   };
@@ -259,7 +259,7 @@ async function runMonitor(opts, dependencies = {}) {
 async function main() {
   const opts = options();
   if (opts.help) {
-    console.log('node [--env-file=.env] cita-regreso.cjs [--browser=firefox|chrome|seleniumbase] [--certificado] [--una-consulta] [--diagnostico] [--solo-cualquiera] [--desde=OFICINA] [--pausa=120] [--max-consultas=N] [--red] [--probar-aviso] [--probar-telegram]');
+    console.log('node [--env-file=.env] cita-regreso.cjs [--browser=firefox|chrome|seleniumbase] [--certificado] [--una-consulta] [--diagnostico] [--solo-cualquiera] [--desde=OFICINA] [--pausa=120] [--max-consultas=N] [--red] [--telegram] [--probar-aviso] [--probar-telegram]');
     return;
   }
   if (opts.testTelegram) {
@@ -270,7 +270,7 @@ async function main() {
   }
   if (opts.testNotification) {
     process.stdout.write('\x07\x07\x07');
-    const delivered = await notifyAll('prueba');
+    const delivered = await notifyAll('prueba', undefined, {}, { enableTelegram: opts.telegram });
     console.log(delivered ? 'Aviso de prueba enviado. Comprueba si Windows lo ha mostrado.' : 'Windows no confirmó el aviso de prueba.');
     return;
   }

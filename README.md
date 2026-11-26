@@ -52,8 +52,11 @@ node .\cita-regreso.cjs --probar-aviso
 # Una consulta con SeleniumBase, sin Cl@ve:
 node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --una-consulta
 
-# Monitor periódico con certificado, cualquier oficina de Barcelona:
+# Monitor con avisos solo en Windows, cualquier oficina de Barcelona:
 node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --certificado --solo-cualquiera
+
+# El mismo monitor con avisos adicionales al móvil por Telegram:
+node --env-file=.env .\cita-regreso.cjs --browser=seleniumbase --certificado --solo-cualquiera --telegram
 
 # Diagnóstico público: llega al formulario sin rellenar ni enviar NIE/nombre:
 node .\cita-regreso.cjs --browser=chrome --diagnostico
@@ -80,7 +83,12 @@ La validación TLS permanece activa en el monitor.
 
 ## Avisos de Telegram al móvil
 
-Los avisos de Windows siguen activos. Telegram añade avisos de posible
+**Telegram es opcional y está desactivado por defecto.** Añade `--telegram` al
+comando del monitor para activarlo en esa ejecución. Sin la opción, solo avisa
+en Windows aunque el token y el chat estén guardados en `.env`; no hace peticiones
+a Telegram. No necesitas borrar las credenciales para desactivarlo.
+
+Los avisos de Windows siguen activos. Con `--telegram`, se añaden avisos de posible
 disponibilidad y de entrega manual (revisión, CAPTCHA o caducidad repetida).
 Las pausas, recuperaciones y reinicios automáticos de una solicitud no generan
 mensajes al móvil. Cada evento envía un solo mensaje; el pitido periódico
@@ -106,9 +114,15 @@ No se eliminan webhooks ni se cambian otros ajustes de un bot existente.
 # Probar solo Telegram, sin abrir navegador ni consultar ICP+:
 node --env-file=.env .\cita-regreso.cjs --probar-telegram
 
-# Probar Windows y, si está configurado, Telegram:
+# Probar solo Windows (predeterminado):
 node --env-file=.env .\cita-regreso.cjs --probar-aviso
+
+# Probar Windows y Telegram:
+node --env-file=.env .\cita-regreso.cjs --probar-aviso --telegram
 ```
+
+`--probar-telegram` y la configuración inicial solicitan expresamente un envío
+de prueba: no requieren además `--telegram` y no consultan ICP+.
 
 Reinicia el monitor para cargar código o ajustes nuevos. Telegram y Windows se
 envían en paralelo: un fallo de un canal no desactiva el otro y no retrasa el
@@ -116,7 +130,7 @@ relleno de contacto. Telegram tiene un límite de cinco segundos por envío y no
 reintenta automáticamente, evitando duplicados cuando el resultado es incierto.
 Los mensajes usan textos fijos y hora de Madrid; no incluyen NIE, nombre,
 teléfono, correo, capturas ni certificados. Las credenciales tampoco se pasan al
-helper de SeleniumBase. Ambos valores vacíos desactivan Telegram.
+helper de SeleniumBase. Activarlo requiere `--telegram` y ambos valores configurados.
 
 «Telegram aceptó el mensaje» significa que su API respondió correctamente; no
 demuestra que el móvil lo mostrara, sonara o lo leyeras. Comprueba la recepción

@@ -115,7 +115,7 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 
 Validation completed:
 
-- **71 Node tests**: classification, response codes, timing/Retry-After, action
+- **73 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
 - **7 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
@@ -266,7 +266,12 @@ not a saved calendar, slot, or booking confirmation verified by this research.
 
 ## Optional private Telegram alerts
 
-Telegram runs alongside Windows delivery, with separate failure handling. Phone
+Telegram is opt-in through `--telegram`; without it the monitor makes no Telegram
+requests, even with valid saved credentials. Windows stays enabled by default.
+The explicit `--probar-telegram` command and initial linking test send to the
+phone without needing the monitor flag. `--probar-aviso` follows the opt-in flag.
+
+When enabled, Telegram runs alongside Windows delivery, with separate failure handling. Phone
 alerts cover possible availability, manual-review handoffs and explicit tests;
 routine cooldown/recovery and automatic request restarts stay on Windows only.
 Contact prefilling starts independently of notification delivery. Each alert is
@@ -282,11 +287,12 @@ chat ID to ignored `.env` and sends one test. It rejects multiple matching chats
 and concurrent `.env` edits; it never deletes an existing webhook. Setup consumes
 bot updates and should use a dedicated bot without another poller.
 
-Twelve local Telegram tests cover configuration, payload privacy, event filtering,
+Thirteen local Telegram tests cover configuration, payload privacy, event filtering,
 HTTP/API/network errors, bounded timeout, independent Windows/Telegram delivery,
 nonce-bound recipients, preservation of local settings, concurrent edits, and
 the phone-only CLI without identity, certificates, Windows alerts or a browser.
-They use injected responses and never call Telegram or ICP+.
+They use injected responses and never call Telegram or ICP+. A monitor test also
+checks that the CLI opt-in setting reaches its actual handoff notifier.
 
 Separately, a dedicated private chat was linked with the one-time Start flow.
 Telegram acknowledged the test message and the user confirmed receiving it on
