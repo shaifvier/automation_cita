@@ -24,7 +24,7 @@ MADRID = ZoneInfo('Europe/Madrid')
 SNAPSHOT_JS = r'''(() => {
   const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const t = norm(document.body?.innerText);
-  const visible = el => el.getClientRects().length > 0;
+  const visible = el => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   const controls = [...document.querySelectorAll('select,input[type=radio],input[type=date]')].filter(visible);
   const choices = controls.some(el => {
     const label = norm([el.id, el.name, el.getAttribute('aria-label'), ...Array.from(el.labels || [], l => l.textContent)].join(' '));
@@ -36,6 +36,17 @@ SNAPSHOT_JS = r'''(() => {
   const entry = /tramites policia nacional/.test(t) && controls.some(e => e.tagName === 'SELECT');
   const challengeFrame = [...document.querySelectorAll('iframe[src*=recaptcha],iframe[src*=hcaptcha],iframe[src*="challenges.cloudflare.com"],.g-recaptcha,.h-captcha,.cf-turnstile')].some(visible);
   const selectionWords = /seleccion(?:a|e|ar)\s+(?:la\s+|una?\s+)?(?:oficina|fecha|dia|hora)|citas? disponibles|calendario/.test(t);
+  const contactForms = [...document.forms].filter(form => {
+    const roles = {phone: 0, email: 0, confirmation: 0};
+    for (const el of [...form.querySelectorAll('input')].filter(el => visible(el) && !el.disabled && !el.readOnly && ['text', 'email', 'tel'].includes(el.type))) {
+      const label = norm([el.id, el.name, el.getAttribute('aria-label'), el.placeholder, ...Array.from(el.labels || [], l => l.textContent)].join(' '));
+      const mail = /e[\s_-]?mail|correo/.test(label), phone = /telefono|movil|phone/.test(label);
+      if (mail && phone) continue;
+      if (mail) roles[/confirm|repet|repit|repeat|verif|(?:email|correo)[\s_-]*(?:dos|2)\b/.test(label) ? 'confirmation' : 'email']++;
+      else if (phone) roles.phone++;
+    }
+    return Object.values(roles).every(count => count === 1);
+  });
   return {
     temporary: /se ha producido un error en el sistema[\s,.;:]*por favor[\s,]*intentelo de nuevo/.test(t),
     expired: /su sesion ha caducado|sesion expirada/.test(t),
@@ -43,7 +54,7 @@ SNAPSHOT_JS = r'''(() => {
     captcha: challengeFrame || /captcha|no soy un robot|verifica que eres humano|verify you are human/.test(t),
     unavailable: /en este momento no hay citas disponibles/.test(t),
     applicantForm, entry, requestButton,
-    candidate: choices && selectionWords && !entry && !applicantForm && !requestButton,
+    candidate: ((choices && selectionWords) || contactForms.length === 1) && !entry && !applicantForm && !requestButton,
     code: (t.match(/no hay citas disponibles\.?\s*(\d{4})\b/) || t.match(/\d{2}:\d{2}:\d{2}(\d{4})\b/) || t.match(/\b(0\d{3})\b\s*cod\. oper/i) || [])[1] || null
   };
 })()'''

@@ -5,6 +5,7 @@ const { classify, codeOf, intervalMs, retryAfterMs, backoffDelay, cooldownDelay,
 const { options, runMonitor, readIdentity, officeQueue, holdForUser } = require('../cita-regreso.cjs');
 const { notification, notify } = require('../lib/notify.cjs');
 const { certificateOptions, helperEnvironment } = require('../lib/browser.cjs');
+const { readContact, contactPlan } = require('../lib/contact.cjs');
 const { EventEmitter } = require('node:events');
 
 const fixtures = [
@@ -27,6 +28,10 @@ const fixtures = [
   ['503', { httpStatus: 503 }, 'fallo temporal'],
   ['HTTP 200 portal system error', { text: 'Se ha producido un error en el sistema, por favor inténtelo de nuevo. En el caso de que el error persista...', httpStatus: 200, selectionStage: true, choices: [{ label: 'Oficina', usable: true }] }, 'fallo temporal'],
   ['unrecognized validation error still needs review', { text: 'Error: revisa los datos del formulario.', httpStatus: 200 }, 'revisión'],
+  ['recognized contact form after availability request', { selectionStage: true, contactForm: true }, 'posible disponibilidad'],
+  ['contact fields before availability are not a candidate', { contactForm: true }, 'revisión'],
+  ['expired contact form is not a candidate', { text: 'Su sesión ha caducado', selectionStage: true, contactForm: true }, 'sesión caducada'],
+  ['contact fields do not override no appointments', { text: 'En este momento no hay citas disponibles', selectionStage: true, contactForm: true }, 'sin citas'],
 ];
 for (const [name, input, expected] of fixtures) test(name, () => assert.equal(classify(input), expected));
 
@@ -64,6 +69,57 @@ test('placeholders and certificate errors never echo input', async () => {
   await assert.rejects(readIdentity({ CITA_NIE: 'REEMPLAZAR_NIE', CITA_NOMBRE: 'REEMPLAZAR' }), /marcadores/);
   assert.throws(() => certificateOptions({ CITA_KEY_PEM: 'PRIVATE-PATH' }), error => !error.message.includes('PRIVATE-PATH'));
 });
+
+test('optional contact configuration validates both fields without exposing values', () => {
+  assert.equal(readContact({}), null);
+  assert.deepEqual(readContact({ CITA_TELEFONO: ' 600 000 001 ', CITA_EMAIL: ' synthetic@example.invalid ' }), { phone: '600000001', email: 'synthetic@example.invalid' });
+  for (const env of [{ CITA_TELEFONO: '600000001' }, { CITA_EMAIL: 'synthetic@example.invalid' }, { CITA_TELEFONO: 'private-input', CITA_EMAIL: 'private-input' }]) {
+    assert.throws(() => readContact(env), error => /CITA_TELEFONO/.test(error.message) && !error.message.includes('private-input'));
+  }
+});
+
+test('contact planning requires three unambiguous fields in the same form', () => {
+  const fields = [{ form: 0, id: 'txtTelefono' }, { form: 0, id: 'emailUNO' }, { form: 0, id: 'emailDOS' }];
+  assert.deepEqual(Object.keys(contactPlan(fields)), ['phone', 'email', 'confirmation']);
+  assert.equal(contactPlan(fields.slice(0, 2)), null);
+  assert.equal(contactPlan([...fields, { form: 0, label: 'Correo electrónico alternativo' }]), null);
+  assert.equal(contactPlan(fields.map((field, index) => ({ ...field, form: index }))), null);
+  assert.ok(contactPlan([{ form: 0, label: 'Teléfono móvil' }, { form: 0, label: 'Correo electrónico' }, { form: 0, label: 'Confirmación del correo electrónico' }]));
+  assert.ok(contactPlan([{ form: 0, label: 'Teléfono' }, { form: 0, label: 'E-mail' }, { form: 0, label: 'Repita e-mail' }]));
+});
+
+test('contact handoff fills before notification callback and stops after one attempt', async () => {
+  const page = new EventEmitter(), browser = new EventEmitter(), controller = new AbortController();
+  page.bringToFront = async () => {};
+  let finishNotification, calls = 0, heldKind;
+  const statuses = [];
+  const pending = holdForUser({ page, browser }, {
+    hold: kind => { heldKind = kind; }, alive: () => true,
+    prefillContact: async () => { calls++; return 'filled'; },
+  }, 'posible disponibilidad', 'Barcelona', {
+    contact: { phone: '600000001', email: 'synthetic@example.invalid' }, signal: controller.signal,
+    sendNotification: () => new Promise(resolve => { finishNotification = resolve; }),
+    reportContact: status => statuses.push(status),
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(heldKind, 'posible disponibilidad'); assert.equal(calls, 1); assert.deepEqual(statuses, ['filled']);
+  controller.abort(); finishNotification(true); await pending;
+  assert.equal(page.listenerCount('close'), 0); assert.equal(browser.listenerCount('disconnected'), 0);
+});
+
+test('review, CAPTCHA and expired handoffs never prefill contact details', async () => {
+  for (const kind of ['revisión', 'captcha', 'sesión caducada']) {
+    const page = new EventEmitter(), browser = new EventEmitter(), controller = new AbortController();
+    page.bringToFront = async () => {};
+    let calls = 0;
+    const pending = holdForUser({ page, browser }, { hold() {}, alive: () => true,
+      prefillContact: async () => { calls++; return 'filled'; },
+    }, kind, 'Barcelona', { contact: { phone: '600000001', email: 'synthetic@example.invalid' },
+      sendNotification: async () => true, signal: controller.signal });
+    await new Promise(resolve => setImmediate(resolve));
+    controller.abort(); await pending; assert.equal(calls, 0);
+  }
+});
 test('notifications distinguish availability, review, challenge and test', async () => {
   const titles = ['posible disponibilidad', 'revisión', 'captcha', 'prueba', 'enfriamiento', 'reanudado', 'sesion_caducada'].map(kind => notification(kind).title);
   assert.equal(new Set(titles).size, 7);
@@ -88,7 +144,7 @@ function harness(states, opts = {}) {
     run: () => runMonitor({ ...options(['--solo-cualquiera', '--max-consultas=3']), ...opts }, {
       readIdentity: async () => { reads++; return { nie: 'X0000000X', name: 'PRIVATE NAME' }; },
       launchSession: async () => { launches++; return { page, browser, close: async () => { closed = true; } }; },
-      createPortal: () => portal, now: () => clock,
+      readContact: () => null, createPortal: () => portal, now: () => clock,
       sleep: async ms => { waits.push(ms); clock += ms; if (opts.interruptCooldown && ms >= 900000) process.emit('SIGINT'); if (opts.closeDuringCooldown && ms >= 900000) page.emit('close'); },
       notify: async (kind, office, details) => { notifications.push({ kind, office, ...details }); if (opts.failNotifications) throw new Error('synthetic failure'); },
       output: record => records.push(record),
@@ -207,7 +263,7 @@ test('browser closes if portal setup fails; exception details are hidden', async
 });
 
 test('helper environment excludes applicant variables case-insensitively', () => {
-  assert.deepEqual(helperEnvironment({ PATH: 'synthetic-path', CITA_NIE: 'PRIVATE', cita_nombre: 'PRIVATE', CiTa_CERT_PASS_FILE: 'PRIVATE' }), { PATH: 'synthetic-path' });
+  assert.deepEqual(helperEnvironment({ PATH: 'synthetic-path', CITA_NIE: 'PRIVATE', cita_nombre: 'PRIVATE', CiTa_CERT_PASS_FILE: 'PRIVATE', CITA_TELEFONO: 'PRIVATE', cita_email: 'PRIVATE' }), { PATH: 'synthetic-path' });
 });
 
 test('research deadline stops before a Retry-After exceeding the remaining budget', async () => {

@@ -7,9 +7,13 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { options, runMonitor } = require('../cita-regreso.cjs');
+const { options, runMonitor, holdForUser } = require('../cita-regreso.cjs');
 const { launchSession, certificateOptions } = require('../lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('../lib/portal.cjs');
+
+const CONTACT = { phone: '600000001', email: 'synthetic@example.invalid' };
+const contactForm = '<h1>Datos de contacto para la cita</h1><form action="/reserve" method="post"><label for="txtTelefono">Teléfono</label><input id="txtTelefono" type="tel"><label for="emailUNO">Correo electrónico</label><input id="emailUNO" type="email"><label for="emailDOS">Confirmar correo electrónico</label><input id="emailDOS" type="email"><button>Continuar</button></form>';
+const observerSnapshot = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'watch_monitor.py'), 'utf8').match(/SNAPSHOT_JS = r'''([\s\S]*?)'''/)[1];
 
 async function fixture() {
   let final = 'available', reservations = 0, validations = 0, certificateLabel = ' Access   eIdentifier ', blocks = 0;
@@ -35,10 +39,13 @@ async function fixture() {
         body = view === 'available'
         ? `<h1>Selecciona Oficina</h1><label for="sede">Oficina</label><select id="sede" onchange="location='/reserve'"><option value="">Selecciona</option><option value="1">Oficina de prueba</option></select><button onclick="location='/reserve'">Confirmar reserva</button>`
         : view === 'unavailable' ? '<p>En este momento no hay citas disponibles. 0501</p><label>Idioma<select><option value="es">Español</option></select></label>'
+        : view === 'contact' ? contactForm
         : view === 'temporary' ? '<p>Se ha producido un error en el sistema, por favor inténtelo de nuevo. En el caso de que el error persista, puede obtener ayuda.</p><button onclick="location=\'/reserve\'">Aceptar</button>'
         : view === 'expired' ? '<p>Su sesión ha caducado por permanecer demasiado tiempo inactiva.</p><p>Deberás iniciar de nuevo la solicitud de la cita previa.</p><button onclick="location=\'/reserve\'">Aceptar</button>'
         : '<p>Página desconocida</p><button onclick="location=\'/reserve\'">Continuar</button>'; break;
       }
+      case '/contact': body = contactForm; break;
+      case '/contact-expired': body = '<p>Su sesión ha caducado</p>' + contactForm; break;
       case '/reserve': reservations++; body = 'ERROR: booking boundary crossed'; break;
       default: body = '<p>Fixture</p>';
     }
@@ -81,9 +88,77 @@ for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
       assert.equal((await certPortal.open()).reason, 'human_handoff');
       assert.equal((await certPortal.checkOffice(ANY_OFFICE)).reason, 'human_handoff');
       assert.deepEqual(site.counts(), before);
+
+      site.setFinal('contact');
+      const contactPortal = createPortal(session, { entry: site.entry, stepDelayMs: 0, sleep: async () => {}, identity: { nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' } });
+      assert.equal((await contactPortal.open()).result, 'ok');
+      assert.equal((await contactPortal.checkOffice(ANY_OFFICE)).result, 'posible disponibilidad');
+      assert.equal(await contactPortal.prefillContact(CONTACT), 'stopped', 'contact writes require an availability handoff');
+      contactPortal.hold('posible disponibilidad');
+      assert.equal(await contactPortal.prefillContact(CONTACT), 'filled');
+      assert.deepEqual(await session.page.locator('form input').evaluateAll(inputs => inputs.map(input => input.value)), [CONTACT.phone, CONTACT.email, CONTACT.email]);
+      assert.equal(await contactPortal.prefillContact(CONTACT), 'ready');
+      assert.equal(site.counts().reservations, 0, 'filling never submits the form');
+
+      await session.page.goto(site.entry + 'contact');
+      await session.page.locator('#txtTelefono').fill('MANUAL EDIT');
+      assert.equal(await contactPortal.prefillContact(CONTACT), 'existing_contact');
+      assert.equal(await session.page.locator('#emailUNO').inputValue(), '');
+      assert.equal(await session.page.locator('#txtTelefono').inputValue(), 'MANUAL EDIT');
+      await session.page.goto(site.entry + 'contact-expired');
+      assert.equal(await contactPortal.prefillContact(CONTACT), 'blocked');
+      assert.equal(await session.page.locator('#txtTelefono').inputValue(), '');
+      await session.page.goto(site.entry + 'contact');
+      await session.page.locator('#emailDOS').evaluate(el => { el.readOnly = true; });
+      assert.equal(await contactPortal.prefillContact(CONTACT), 'waiting');
+      assert.equal(await session.page.locator('#txtTelefono').inputValue(), '');
+      const other = await fixture();
+      try {
+        await session.page.goto(other.entry + 'contact');
+        assert.equal(await contactPortal.prefillContact(CONTACT), 'stopped', 'no contact data on another origin');
+        assert.equal(await session.page.locator('#txtTelefono').inputValue(), '');
+        assert.equal(other.counts().reservations, 0);
+      } finally { await other.close(); }
+      assert.equal(site.counts().reservations, 0);
     } finally { if (session) await session.close(); await site.close(); }
   });
 }
+
+test('contact handoff waits for manual navigation, fills once, and leaves submission to the user', { timeout: 60000 }, async () => {
+  const site = await fixture();
+  let session;
+  const controller = new AbortController();
+  try {
+    session = await launchSession('chrome');
+    const portal = createPortal(session, { entry: site.entry, stepDelayMs: 0, sleep: async () => {}, identity: { nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' } });
+    await portal.open();
+    assert.equal((await portal.checkOffice(ANY_OFFICE)).result, 'posible disponibilidad');
+    let statusReady;
+    const filled = new Promise(resolve => { statusReady = resolve; });
+    const statuses = [];
+    const pending = holdForUser(session, portal, 'posible disponibilidad', ANY_OFFICE, {
+      contact: CONTACT, signal: controller.signal, sendNotification: async () => true,
+      reportContact: status => { statuses.push(status); if (status === 'filled') statusReady(); },
+    });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      assert.equal(session.page.url(), site.entry + 'selection', 'handoff never clicks the office or date');
+      // Simulate the person continuing to the contact page; the monitor never navigates here.
+      await session.page.goto(site.entry + 'contact');
+      await Promise.race([filled, new Promise((_, reject) => setTimeout(() => reject(new Error('No contact prefill')), 7000))]);
+      assert.deepEqual(statuses, ['waiting', 'filled']);
+      const observed = await session.page.evaluate(observerSnapshot);
+      assert.equal(observed.candidate, true, 'observer recognizes contact-only availability too');
+      assert.equal(JSON.stringify(observed).includes(CONTACT.email), false, 'observer flags never contain contact values');
+      await session.page.locator('#emailUNO').fill('manual@example.invalid');
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      assert.equal(await session.page.locator('#emailUNO').inputValue(), 'manual@example.invalid');
+      await session.page.locator('#emailUNO').evaluate(el => el.parentNode.appendChild(el.cloneNode()));
+      assert.equal((await session.page.evaluate(observerSnapshot)).candidate, false, 'ambiguous duplicate email is not a contact-form candidate');
+      assert.equal(site.counts().reservations, 0);
+    } finally { controller.abort(); await pending; }
+  } finally { if (session) await session.close(); await site.close(); }
+});
 
 test('SeleniumBase CDP: encrypted PEM context presents a client certificate', { timeout: 180000 }, async () => {
   fs.mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });

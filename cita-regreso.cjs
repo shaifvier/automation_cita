@@ -1,5 +1,5 @@
 'use strict';
-// Monitor ICP+: stops at the first appointment-selection page. No booking actions.
+// Monitor ICP+: hands off selection and booking; optional contact-only prefilling.
 const fs = require('node:fs');
 const path = require('node:path');
 const { createInterface } = require('node:readline/promises');
@@ -8,6 +8,7 @@ const { intervalMs, retryAfterMs, backoffDelay, cooldownDelay, safeRecord, redac
 const { certificateOptions, launchSession } = require('./lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('./lib/portal.cjs');
 const { notify } = require('./lib/notify.cjs');
+const { readContact } = require('./lib/contact.cjs');
 
 function options(args = process.argv.slice(2)) {
   const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--help']);
@@ -44,12 +45,32 @@ async function readIdentity(env = process.env) {
   return { nie, name };
 }
 
-async function holdForUser(session, portal, kind, office, { sendNotification = notify, signal } = {}) {
-  portal.hold(); // No portal interaction or challenge solving after this point.
-  const delivered = await sendNotification(kind, office);
-  console.log(delivered ? 'Aviso enviado a Windows; revisa el navegador.' : 'Aviso de Windows no confirmado; revisa el navegador.');
-  if (!portal.alive() || signal?.aborted) return;
-  await session.page.bringToFront().catch(() => {});
+async function holdForUser(session, portal, kind, office, {
+  sendNotification = notify, signal, contact, reportContact = () => {},
+} = {}) {
+  portal.hold(kind); // No navigation, selection, submission or challenge solving after handoff.
+  // Start the alert immediately; its delivery callback must not delay contact filling.
+  const notificationTask = Promise.resolve().then(() => sendNotification(kind, office)).catch(() => false)
+    .then(delivered => console.log(delivered ? 'Aviso enviado a Windows; revisa el navegador.' : 'Aviso de Windows no confirmado; revisa el navegador.'));
+  if (!portal.alive() || signal?.aborted) { await notificationTask; return; }
+  const prefillController = new AbortController();
+  let contactTask = Promise.resolve(), filling = false, lastContactStatus;
+  let watchContact = kind === 'posible disponibilidad' && Boolean(contact) && typeof portal.prefillContact === 'function';
+  const tryContact = () => {
+    if (!watchContact || filling || prefillController.signal.aborted) return;
+    filling = true;
+    contactTask = (async () => {
+      let status;
+      try { status = await portal.prefillContact(contact, { signal: prefillController.signal }); }
+      catch { status = 'failed'; }
+      if (prefillController.signal.aborted) return;
+      if (status !== 'waiting') watchContact = false; // Never refill after manual edits or a completed attempt.
+      if (status !== lastContactStatus) {
+        lastContactStatus = status;
+        try { reportContact(status); } catch { /* Reporting must not close a manual booking window. */ }
+      }
+    })().finally(() => { filling = false; });
+  };
   await new Promise(resolve => {
     let count = 0;
     const tick = () => {
@@ -57,15 +78,19 @@ async function holdForUser(session, portal, kind, office, { sendNotification = n
       if (count++ < 30) process.stdout.write('\x07\x07\x07');
     };
     const timer = setInterval(tick, 20_000);
+    const contactTimer = watchContact ? setInterval(tryContact, 1000) : null;
     const finish = () => {
-      clearInterval(timer);
+      clearInterval(timer); clearInterval(contactTimer); prefillController.abort();
       session.page.off('close', finish); session.browser.off('disconnected', finish);
       signal?.removeEventListener('abort', finish); resolve();
     };
     session.page.once('close', finish); session.browser.once('disconnected', finish);
     signal?.addEventListener('abort', finish, { once: true });
+    void session.page.bringToFront().catch(() => {});
+    tryContact();
     tick();
   });
+  await Promise.all([contactTask, notificationTask]);
 }
 
 function officeQueue(offices, opts, excluded, round) {
@@ -87,7 +112,8 @@ function officeQueue(offices, opts, excluded, round) {
 
 async function runMonitor(opts, dependencies = {}) {
   const identity = opts.diagnostic ? {} : await (dependencies.readIdentity || readIdentity)();
-  const secrets = [identity.nie, identity.name, ...(identity.name || '').split(/\s+/)].filter(s => s && s.length > 2);
+  const contact = opts.diagnostic ? null : (dependencies.readContact || readContact)();
+  const secrets = [identity.nie, identity.name, contact?.phone, contact?.email, ...(identity.name || '').split(/\s+/)].filter(s => s && s.length > 2);
   const now = dependencies.now || Date.now;
   const sendNotification = dependencies.notify || ((kind, office, details) => notify(kind, office, undefined, details));
   const signalStatus = async (kind, office, details) => {
@@ -187,7 +213,11 @@ async function runMonitor(opts, dependencies = {}) {
       const handoff = ['posible disponibilidad', 'captcha', 'revisión', 'sesión caducada'].includes(state.result);
       if (handoff) {
         // Diagnostic mode never submitted identity and is a bounded public probe.
-        if (!opts.diagnostic) await (dependencies.holdForUser || holdForUser)(session, portal, state.result, label, { signal: controller.signal });
+        if (!opts.diagnostic) await (dependencies.holdForUser || holdForUser)(session, portal, state.result, label, {
+          signal: controller.signal, sendNotification, contact,
+          reportContact: status => report({ stage: 'hold', result: ['filled', 'ready'].includes(status) ? 'contacto preparado' : 'contacto pendiente',
+            reason: `contact_prefill_${status}` }, label),
+        });
         return { checks, result: state.result };
       }
       if (failed) {

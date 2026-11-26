@@ -93,8 +93,9 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 ## Monitor behavior and validation
 
 - An unknown final page produces **revisión**, never an availability claim.
-- Potential availability requires the post-request stage, appointment-selection
-  wording, and a usable office/date/time control. Generic language/document-type
+- Potential availability requires the post-request stage and either appointment-selection
+  wording with a usable office/date/time control, or a recognized contact form.
+  Generic language/document-type
   controls are insufficient. The alert deliberately says **possible availability**.
 - The selection and human-handoff stages permit no booking actions. Handoff
   seals the portal instance, stops navigation tracing, and retains the context
@@ -114,10 +115,10 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 
 Validation completed:
 
-- **51 Node tests**: classification, response codes, timing/Retry-After, action
+- **59 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
-- **6 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
+- **7 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
   mTLS handshake, plus real-browser HTTP 429 and expired-request recovery fixtures. All flows use local fixtures and synthetic identities. The
   booking sentinel received **zero requests**. The certificate-entry fixture
   includes whitespace in the input button's accessible name.
@@ -233,3 +234,32 @@ origin and flow guards remain decisive. Local browser fixtures verify that the
 error is not reported as availability and that its Aceptar button is not clicked.
 The observer records the categorical state as `temporary_error`. No actual
 appointment opening is inferred from this error page.
+
+## Optional contact prefilling after an availability alert
+
+`CITA_TELEFONO` and `CITA_EMAIL` enable an explicit contact-only exception after
+an availability handoff. The values stay in ignored local `.env`; public fixtures
+use synthetic data. Notification delivery does not delay filling. The monitor
+recognizes a unique same-form phone/email/email-confirmation triplet and fills
+only blank fields, using the email twice. Existing different values are left
+for the user. All three fields are checked before any write. Filling is limited
+to the ICP+ origin and stops on known error, expiry or challenge pages.
+
+If the contact form follows manual office/date navigation, the handoff checks
+for it locally once per second. It never clicks through those steps. The watcher
+stops after the first recognized filling attempt, preserving subsequent edits.
+No contact form submission, date selection, consent check or booking action is
+performed. Console records contain categorical `contact_prefill_*` reasons only.
+Private observer screenshots may show contact data and remain ignored by Git.
+
+A complete contact form reached directly after requesting availability is also
+treated as a possible opening, subject to the same error checks. The read-only
+observer recognizes the same three contact roles. Local browser fixtures cover
+both direct and manually reached forms, origin restrictions, existing edits,
+expiry, and zero booking requests. The live page was inspected without inputs or
+navigation but no longer exposed contact fields; matching against a real positive
+contact screen remains unverified. An alert is not evidence of a reserved slot.
+
+The user supplied a `posible disponibilidad` console sample and described a
+following phone/email/confirmation screen. This is user-provided context; it is
+not a saved calendar, slot, or booking confirmation verified by this research.

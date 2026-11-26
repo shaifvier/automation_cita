@@ -5,6 +5,8 @@ y Chrome lanzado por SeleniumBase y conectado por CDP. **No reserva citas**:
 se detiene ante una pantalla reconocible de selección de oficina/fecha/hora,
 emite un aviso de Windows y deja la ventana para que una persona continúe.
 Una pantalla desconocida produce un aviso de revisión distinto.
+Puede rellenar opcionalmente el teléfono y los dos campos de correo sin enviar
+el formulario; la selección de oficina/fecha/hora y la reserva quedan a cargo de la persona.
 
 La detección real de disponibilidad sigue siendo experimental. Una respuesta
 «no hay citas», incluidos los códigos 0017/0501, no demuestra por sí sola ni la
@@ -26,6 +28,22 @@ Copy-Item .env.example .env
 Edita **solo `.env`**, que Git ignora. Sustituye `CITA_NIE` y `CITA_NOMBRE`.
 Para `CITA_PYTHON`, usa la ruta a `.venv/Scripts/python.exe` de tu clon.
 No publiques ese archivo ni pegues datos privados en issues o conversaciones.
+
+Para preparar los datos de contacto, configura también `CITA_TELEFONO` y
+`CITA_EMAIL` en `.env`. Ambos vacíos desactivan el relleno. Después de detectar
+posible disponibilidad, el aviso se inicia inmediatamente y se rellenan solo
+los tres campos reconocibles de teléfono, correo y confirmación del correo,
+en un mismo formulario del portal ICP+. Si aparecen después de que continúes
+manualmente, el monitor espera y los rellena entonces. No pulsa Continuar,
+no elige oficina/fecha/hora ni envía datos de contacto o una reserva mediante un botón.
+El portal puede recibir cambios de campo durante el relleno; revisa los datos antes de enviarlos.
+
+El relleno se intenta una sola vez al reconocer el formulario. Si hay valores
+distintos ya escritos, deja el formulario para revisión sin reemplazarlos. Una
+página caducada, bloqueada, con CAPTCHA o de otro origen no recibe los datos.
+La consola informa `contacto preparado` o `contacto pendiente`, con un motivo
+`contact_prefill_*`, sin imprimir teléfono ni correo. La opción necesita un
+reinicio del monitor para cargar cambios de código o de `.env`.
 
 ```powershell
 # Verificar que Windows muestra el aviso (sin consultar el portal):
@@ -102,13 +120,15 @@ La validación TLS permanece activa en el monitor.
   La página se vuelve a clasificar: que el método termine no prueba que haya
   resuelto el desafío. Si no puede continuar, avisa y se detiene.
 - Una posible disponibilidad, pantalla desconocida o caducidad repetida detiene
-  la automatización. El aviso suena cada 20 s durante hasta 10 min; la ventana
+  las consultas y la navegación automática. Solo después de posible disponibilidad
+  puede continuar el relleno opcional de contacto descrito arriba.
+  El aviso suena cada 20 s durante hasta 10 min; la ventana
   y el contexto permanecen abiertos hasta que la persona los cierre.
 - Windows puede ocultar avisos por su configuración o modo de concentración.
   El pitido y el mensaje de consola sirven como aviso adicional.
 
 La salida JSON contiene hora UTC, navegador, autenticación, oficina, etapa,
-HTTP, resultado, código de respuesta y motivo enumerado de revisión. No guarda texto de página, datos del
+HTTP, resultado, código de respuesta y motivo enumerado de revisión o relleno. No guarda texto de página, datos del
 solicitante ni material del certificado. `artifacts/` contiene únicamente
 caché local de oficinas y, si ejecutas la investigación, registros sanitizados;
 Git ignora esa carpeta. Las oficinas sin trámite se revisan cada diez rondas.
