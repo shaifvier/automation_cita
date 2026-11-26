@@ -62,6 +62,7 @@ test('metadata excludes bodies and secrets; redaction is case insensitive', () =
 test('CLI defaults and invalid options', () => {
   assert.equal(options([]).browser, 'firefox'); assert.equal(options([]).interval, 120000);
   assert.equal(options(['--una-consulta']).maxChecks, 1);
+  assert.equal(options(['--probar-telegram']).testTelegram, true);
   assert.throws(() => options(['--browser=bad'])); assert.throws(() => options(['--max-consultas=0']));
   assert.throws(() => options(['--unknown'])); assert.throws(() => options(['--browser'])); assert.throws(() => options(['--pausa=']));
 });
@@ -263,7 +264,7 @@ test('browser closes if portal setup fails; exception details are hidden', async
 });
 
 test('helper environment excludes applicant variables case-insensitively', () => {
-  assert.deepEqual(helperEnvironment({ PATH: 'synthetic-path', CITA_NIE: 'PRIVATE', cita_nombre: 'PRIVATE', CiTa_CERT_PASS_FILE: 'PRIVATE', CITA_TELEFONO: 'PRIVATE', cita_email: 'PRIVATE' }), { PATH: 'synthetic-path' });
+  assert.deepEqual(helperEnvironment({ PATH: 'synthetic-path', CITA_NIE: 'PRIVATE', cita_nombre: 'PRIVATE', CiTa_CERT_PASS_FILE: 'PRIVATE', CITA_TELEFONO: 'PRIVATE', cita_email: 'PRIVATE', CITA_TELEGRAM_TOKEN: 'PRIVATE', CITA_TELEGRAM_CHAT_ID: 'PRIVATE' }), { PATH: 'synthetic-path' });
 });
 
 test('research deadline stops before a Retry-After exceeding the remaining budget', async () => {

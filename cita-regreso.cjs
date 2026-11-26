@@ -7,11 +7,12 @@ const { setTimeout: pause } = require('node:timers/promises');
 const { intervalMs, retryAfterMs, backoffDelay, cooldownDelay, safeRecord, redact } = require('./lib/core.cjs');
 const { certificateOptions, launchSession } = require('./lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('./lib/portal.cjs');
-const { notify } = require('./lib/notify.cjs');
+const { notifyAll } = require('./lib/notify.cjs');
+const { sendTelegram, telegramStatus } = require('./lib/telegram.cjs');
 const { readContact } = require('./lib/contact.cjs');
 
 function options(args = process.argv.slice(2)) {
-  const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--help']);
+  const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--probar-telegram', '--help']);
   const values = new Set(['--browser', '--pausa', '--desde', '--max-consultas']);
   for (const arg of args) {
     if (!flags.has(arg) && !values.has(arg.split('=')[0])) throw new Error('Opcion desconocida. Usa --help.');
@@ -27,7 +28,7 @@ function options(args = process.argv.slice(2)) {
   return { browser, diagnostic, once, maxChecks, interval: intervalMs(value('--pausa')),
     onlyAny: args.includes('--solo-cualquiera') || once || diagnostic,
     certificate: args.includes('--certificado'), trace: args.includes('--red'),
-    resume: value('--desde'), testNotification: args.includes('--probar-aviso'), help: args.includes('--help') };
+    resume: value('--desde'), testNotification: args.includes('--probar-aviso'), testTelegram: args.includes('--probar-telegram'), help: args.includes('--help') };
 }
 
 async function readIdentity(env = process.env) {
@@ -46,7 +47,7 @@ async function readIdentity(env = process.env) {
 }
 
 async function holdForUser(session, portal, kind, office, {
-  sendNotification = notify, signal, contact, reportContact = () => {},
+  sendNotification = notifyAll, signal, contact, reportContact = () => {},
 } = {}) {
   portal.hold(kind); // No navigation, selection, submission or challenge solving after handoff.
   // Start the alert immediately; its delivery callback must not delay contact filling.
@@ -115,7 +116,7 @@ async function runMonitor(opts, dependencies = {}) {
   const contact = opts.diagnostic ? null : (dependencies.readContact || readContact)();
   const secrets = [identity.nie, identity.name, contact?.phone, contact?.email, ...(identity.name || '').split(/\s+/)].filter(s => s && s.length > 2);
   const now = dependencies.now || Date.now;
-  const sendNotification = dependencies.notify || ((kind, office, details) => notify(kind, office, undefined, details));
+  const sendNotification = dependencies.notify || ((kind, office, details) => notifyAll(kind, office, details));
   const signalStatus = async (kind, office, details) => {
     if (!opts.diagnostic) { try { await sendNotification(kind, office, details); } catch { /* A notification failure must not stop recovery. */ } }
   };
@@ -258,12 +259,18 @@ async function runMonitor(opts, dependencies = {}) {
 async function main() {
   const opts = options();
   if (opts.help) {
-    console.log('node [--env-file=.env] cita-regreso.cjs [--browser=firefox|chrome|seleniumbase] [--certificado] [--una-consulta] [--diagnostico] [--solo-cualquiera] [--desde=OFICINA] [--pausa=120] [--max-consultas=N] [--red] [--probar-aviso]');
+    console.log('node [--env-file=.env] cita-regreso.cjs [--browser=firefox|chrome|seleniumbase] [--certificado] [--una-consulta] [--diagnostico] [--solo-cualquiera] [--desde=OFICINA] [--pausa=120] [--max-consultas=N] [--red] [--probar-aviso] [--probar-telegram]');
+    return;
+  }
+  if (opts.testTelegram) {
+    const status = await sendTelegram('prueba');
+    console.log(telegramStatus(status));
+    if (status !== 'accepted') process.exitCode = 1;
     return;
   }
   if (opts.testNotification) {
     process.stdout.write('\x07\x07\x07');
-    const delivered = await notify('prueba');
+    const delivered = await notifyAll('prueba');
     console.log(delivered ? 'Aviso de prueba enviado. Comprueba si Windows lo ha mostrado.' : 'Windows no confirmó el aviso de prueba.');
     return;
   }

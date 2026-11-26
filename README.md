@@ -78,6 +78,54 @@ importan certificados en Windows ni se cambian políticas de Chrome. Si falla
 Cl@ve, se solicita revisión; no se cambia automáticamente a la ruta sin Cl@ve.
 La validación TLS permanece activa en el monitor.
 
+## Avisos de Telegram al móvil
+
+Los avisos de Windows siguen activos. Telegram añade avisos de posible
+disponibilidad y de entrega manual (revisión, CAPTCHA o caducidad repetida).
+Las pausas, recuperaciones y reinicios automáticos de una solicitud no generan
+mensajes al móvil. Cada evento envía un solo mensaje; el pitido periódico
+continúa siendo local. El ordenador debe seguir encendido y conectado.
+
+1. Crea un bot dedicado con `/newbot` en el [BotFather oficial](https://t.me/BotFather).
+2. Guarda el token únicamente en `CITA_TELEGRAM_TOKEN` dentro de `.env`.
+   Deja `CITA_TELEGRAM_CHAT_ID` vacío para enlazarlo; no publiques el token ni
+   lo pongas en `.env.example`, capturas o URLs del navegador.
+3. Ejecuta la configuración y abre en tu Telegram el enlace temporal que muestra:
+
+```powershell
+node --env-file=.env .\scripts\setup-telegram.cjs
+```
+
+Pulsa **Start/Iniciar** en ese enlace antes de dos minutos. Solo se acepta el
+chat privado que envía el código temporal; se guarda su ID en `.env` y se envía
+un mensaje de prueba. Si `.env` cambia durante el enlace, no sobrescribe esos
+cambios. Usa un bot dedicado sin webhook ni otro consumidor de `getUpdates`.
+No se eliminan webhooks ni se cambian otros ajustes de un bot existente.
+
+```powershell
+# Probar solo Telegram, sin abrir navegador ni consultar ICP+:
+node --env-file=.env .\cita-regreso.cjs --probar-telegram
+
+# Probar Windows y, si está configurado, Telegram:
+node --env-file=.env .\cita-regreso.cjs --probar-aviso
+```
+
+Reinicia el monitor para cargar código o ajustes nuevos. Telegram y Windows se
+envían en paralelo: un fallo de un canal no desactiva el otro y no retrasa el
+relleno de contacto. Telegram tiene un límite de cinco segundos por envío y no
+reintenta automáticamente, evitando duplicados cuando el resultado es incierto.
+Los mensajes usan textos fijos y hora de Madrid; no incluyen NIE, nombre,
+teléfono, correo, capturas ni certificados. Las credenciales tampoco se pasan al
+helper de SeleniumBase. Ambos valores vacíos desactivan Telegram.
+
+«Telegram aceptó el mensaje» significa que su API respondió correctamente; no
+demuestra que el móvil lo mostrara, sonara o lo leyeras. Comprueba la recepción
+real de la prueba y los permisos de notificación/No molestar del móvil. La reserva
+se completa en el navegador del ordenador que conserva la sesión.
+
+Referencia: [Bot API de Telegram](https://core.telegram.org/bots/api#sendmessage)
+y [enlaces privados de bots](https://core.telegram.org/bots/features#deep-linking).
+
 ## Funcionamiento y opciones
 
 - Pausa predeterminada de **120 s** entre consultas completadas; mínimo de 85 s,
