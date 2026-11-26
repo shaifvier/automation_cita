@@ -114,7 +114,7 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 
 Validation completed:
 
-- **49 Node tests**: classification, response codes, timing/Retry-After, action
+- **51 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
 - **6 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
@@ -221,3 +221,15 @@ methods, retaining candidate observations when screenshot capture fails, and
 explicitly reporting coverage gaps and stopped monitor runs.
 No live appointment was selected to test capture. Overnight reports and images
 remain under ignored `artifacts/`; they are not part of the public research data.
+
+## Retryable HTTP-200 portal error
+
+The specific ICP+ message "Se ha producido un error en el sistema, por favor
+inténtelo de nuevo" is now classified as a temporary failure even when HTTP is
+200. It enters the existing bounded backoff/cooldown policy. Generic form errors
+remain unknown/review states. The portal waits recognize this message directly,
+and a generic failed click cannot hide a subsequently observed known error;
+origin and flow guards remain decisive. Local browser fixtures verify that the
+error is not reported as availability and that its Aceptar button is not clicked.
+The observer records the categorical state as `temporary_error`. No actual
+appointment opening is inferred from this error page.

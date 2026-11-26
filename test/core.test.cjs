@@ -25,6 +25,8 @@ const fixtures = [
   ['429', { text: 'En este momento no hay citas disponibles', httpStatus: 429 }, 'rechazo'],
   ['403', { httpStatus: 403 }, 'rechazo'],
   ['503', { httpStatus: 503 }, 'fallo temporal'],
+  ['HTTP 200 portal system error', { text: 'Se ha producido un error en el sistema, por favor inténtelo de nuevo. En el caso de que el error persista...', httpStatus: 200, selectionStage: true, choices: [{ label: 'Oficina', usable: true }] }, 'fallo temporal'],
+  ['unrecognized validation error still needs review', { text: 'Error: revisa los datos del formulario.', httpStatus: 200 }, 'revisión'],
 ];
 for (const [name, input, expected] of fixtures) test(name, () => assert.equal(classify(input), expected));
 

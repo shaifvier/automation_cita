@@ -37,6 +37,7 @@ SNAPSHOT_JS = r'''(() => {
   const challengeFrame = [...document.querySelectorAll('iframe[src*=recaptcha],iframe[src*=hcaptcha],iframe[src*="challenges.cloudflare.com"],.g-recaptcha,.h-captcha,.cf-turnstile')].some(visible);
   const selectionWords = /seleccion(?:a|e|ar)\s+(?:la\s+|una?\s+)?(?:oficina|fecha|dia|hora)|citas? disponibles|calendario/.test(t);
   return {
+    temporary: /se ha producido un error en el sistema[\s,.;:]*por favor[\s,]*intentelo de nuevo/.test(t),
     expired: /su sesion ha caducado|sesion expirada/.test(t),
     rejected: /requested url was rejected|request rejected|access denied|too many requests/.test(t),
     captcha: challengeFrame || /captcha|no soy un robot|verifica que eres humano|verify you are human/.test(t),
@@ -51,6 +52,8 @@ SNAPSHOT_JS = r'''(() => {
 def category(state, host):
     if state.get('rejected'):
         return 'rejected'
+    if state.get('temporary'):
+        return 'temporary_error'
     if state.get('expired'):
         return 'session_expired'
     if state.get('captcha'):

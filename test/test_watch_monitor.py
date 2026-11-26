@@ -59,6 +59,7 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(watch.category({'candidate': True, 'entry': True}, host), 'checking')
         self.assertEqual(watch.category({'candidate': True, 'applicantForm': True}, host), 'checking')
         self.assertEqual(watch.category({'unavailable': True}, host), 'no_appointments')
+        self.assertEqual(watch.category({'temporary': True, 'candidate': True}, host), 'temporary_error')
 
     def test_report_uses_madrid_time_and_restores_history(self):
         with tempfile.TemporaryDirectory() as directory:

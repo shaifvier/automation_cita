@@ -35,6 +35,7 @@ async function fixture() {
         body = view === 'available'
         ? `<h1>Selecciona Oficina</h1><label for="sede">Oficina</label><select id="sede" onchange="location='/reserve'"><option value="">Selecciona</option><option value="1">Oficina de prueba</option></select><button onclick="location='/reserve'">Confirmar reserva</button>`
         : view === 'unavailable' ? '<p>En este momento no hay citas disponibles. 0501</p><label>Idioma<select><option value="es">Español</option></select></label>'
+        : view === 'temporary' ? '<p>Se ha producido un error en el sistema, por favor inténtelo de nuevo. En el caso de que el error persista, puede obtener ayuda.</p><button onclick="location=\'/reserve\'">Aceptar</button>'
         : view === 'expired' ? '<p>Su sesión ha caducado por permanecer demasiado tiempo inactiva.</p><p>Deberás iniciar de nuevo la solicitud de la cita previa.</p><button onclick="location=\'/reserve\'">Aceptar</button>'
         : '<p>Página desconocida</p><button onclick="location=\'/reserve\'">Continuar</button>'; break;
       }
@@ -56,7 +57,7 @@ for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
     try {
       session = await launchSession(mode);
       const portal = createPortal(session, { entry: site.entry, stepDelayMs: 0, sleep: async () => {}, identity: { nie: 'X0000000X', name: 'SYNTHETIC FIXTURE' } });
-      for (const [final, expected] of [['available', 'posible disponibilidad'], ['unavailable', 'sin citas'], ['unknown', 'revisión'], ['expired', 'sesión caducada']]) {
+      for (const [final, expected] of [['available', 'posible disponibilidad'], ['unavailable', 'sin citas'], ['unknown', 'revisión'], ['expired', 'sesión caducada'], ['temporary', 'fallo temporal']]) {
         site.setFinal(final);
         assert.equal((await portal.open()).result, 'ok');
         const result = await portal.checkOffice(ANY_OFFICE);
@@ -64,7 +65,7 @@ for (const mode of ['firefox', 'chrome', 'seleniumbase']) {
         if (final === 'unavailable') assert.equal(result.code, '0501');
         assert.equal(site.counts().reservations, 0);
       }
-      assert.equal(site.counts().validations, 4);
+      assert.equal(site.counts().validations, 5);
       site.setFinal('available');
       let certPortal;
       for (const label of [' Access   eIdentifier ', 'Acceso DNIe / Certificado electrónico']) {

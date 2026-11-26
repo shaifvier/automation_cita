@@ -64,6 +64,9 @@ La validación TLS permanece activa en el monitor.
 
 - Pausa predeterminada de **120 s** entre consultas completadas; mínimo de 85 s,
   incluso al cambiar de ronda u oficina. `--pausa=SEGUNDOS` permite aumentarla.
+- El mensaje concreto de ICP+ "Se ha producido un error en el sistema, por favor
+  inténtelo de nuevo" se trata como fallo temporal aunque devuelva HTTP 200.
+  Los errores de validación desconocidos siguen requiriendo revisión.
 - `Retry-After` puede prolongar cualquier espera. Tras tres fallos consecutivos
   (rechazo o error temporal), entra en una pausa de **15 min** y hace una sola
   consulta de prueba en la misma sesión. Si sigue bloqueado, espera **30 min**,
