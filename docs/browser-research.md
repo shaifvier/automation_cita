@@ -115,7 +115,7 @@ minimum, honors Retry-After, and enters an extended cooldown after repeated fail
 
 Validation completed:
 
-- **79 Node tests**: classification, response codes, timing/Retry-After, action
+- **82 Node tests**: classification, response codes, timing/Retry-After, action
   boundaries, secret-safe errors, notification distinctions, three recurring
   control cycles, handoff retention, and browser cleanup.
 - **8 browser integration tests**: Firefox, Chrome, SeleniumBase, and a synthetic
@@ -287,7 +287,7 @@ chat ID to ignored `.env` and sends one test. It rejects multiple matching chats
 and concurrent `.env` edits; it never deletes an existing webhook. Setup consumes
 bot updates and should use a dedicated bot without another poller.
 
-Nineteen local Telegram tests cover configuration, payload privacy, event filtering,
+Twenty-two local Telegram tests cover configuration, payload privacy, event filtering,
 HTTP/API/network errors, bounded timeout, independent Windows/Telegram delivery,
 nonce-bound recipients, preservation of local settings, concurrent edits, and
 the phone-only CLI without identity, certificates, Windows alerts or a browser.
@@ -309,7 +309,7 @@ capture, in parallel with the original text alert. An accepted text message is
 followed by a silent photo with an event caption; a failed capture or upload does
 not suppress the text or desktop alert. No screenshots accompany routine retries.
 
-The capture uses the current ICP+ page viewport, in-memory JPEG bytes, a two-second
+The capture uses the current ICP+ page viewport, in-memory JPEG bytes, a five-second
 deadline, and screenshot masks for input fields and known applicant values. The
 page's form values remain intact. Other page details can remain visible, so this
 flag is explicit consent to send the masked view through the configured private
@@ -326,3 +326,20 @@ labelled local demonstration image; it did not query or alter an ICP+ session.
 The synthetic demo image remains private under ignored `artifacts/` for review.
 
 Reference: [Telegram sendPhoto](https://core.telegram.org/bots/api#sendphoto).
+
+## Distinguishing screenshot capture and upload failures
+
+The previous single failure line combined origin skips, capture timeouts, page
+changes, and Telegram upload errors. It cannot establish a past failure's cause.
+The monitor now preserves enumerated capture reasons and logs whether a photo
+upload was attempted. Upload diagnostics retain only categorical status and
+numeric HTTP/API codes; raw error descriptions, URLs and response bodies remain
+excluded. The ICP+-only capture boundary is unchanged.
+
+The two-second capture budget was too short for some slow renders. A local Chrome
+fixture with a three-second font response reproduces capture timeout at two
+seconds and succeeds with the new five-second default. The text alert is already
+sent independently, so this increase does not delay that alert or contact filling.
+This regression is evidence for a reproducible failure mode, not proof that a
+specific overnight incident had that cause. Three additional unit tests cover
+diagnostic categories, capture-vs-upload separation and sanitized error codes.

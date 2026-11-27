@@ -10,7 +10,7 @@ const { createPortal, ANY_OFFICE } = require('./lib/portal.cjs');
 const { notifyAll } = require('./lib/notify.cjs');
 const { sendTelegram, telegramStatus } = require('./lib/telegram.cjs');
 const { readContact } = require('./lib/contact.cjs');
-const { captureTelegramScreenshot } = require('./lib/screenshot.cjs');
+const { captureTelegramScreenshotResult } = require('./lib/screenshot.cjs');
 
 function options(args = process.argv.slice(2)) {
   const flags = new Set(['--diagnostico', '--red', '--solo-cualquiera', '--certificado', '--una-consulta', '--probar-aviso', '--probar-telegram', '--telegram', '--telegram-screenshot', '--help']);
@@ -120,7 +120,7 @@ async function runMonitor(opts, dependencies = {}) {
   const now = dependencies.now || Date.now;
   const sendNotification = dependencies.notify || ((kind, office, details) => (dependencies.notifyAll || notifyAll)(kind, office, details, {
     enableTelegram: opts.telegram,
-    ...(opts.telegramScreenshot ? { screenshot: () => captureTelegramScreenshot(session.page, { secrets }) } : {}),
+    ...(opts.telegramScreenshot ? { screenshot: () => captureTelegramScreenshotResult(session.page, { secrets }) } : {}),
   }));
   const signalStatus = async (kind, office, details) => {
     if (!opts.diagnostic) { try { await sendNotification(kind, office, details); } catch { /* A notification failure must not stop recovery. */ } }

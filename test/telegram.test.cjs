@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { readTelegramConfig, telegramRequest, sendTelegram, sendTelegramPhoto, telegramText, telegramStatus } = require('../lib/telegram.cjs');
-const { captureTelegramScreenshot } = require('../lib/screenshot.cjs');
+const { captureTelegramScreenshot, captureTelegramScreenshotResult } = require('../lib/screenshot.cjs');
 const { notifyAll } = require('../lib/notify.cjs');
 const { findLinkedChat, setupTelegram } = require('../scripts/setup-telegram.cjs');
 const token = '123456789:synthetic_token_for_local_tests_only';
@@ -177,7 +177,7 @@ test('screenshot capture masks fields and literal applicant text without saving 
   const page = { url: () => 'https://icp.administracionelectronica.gob.es/selection',
     locator: selector => { masks.push(selector); return selector; }, getByText: regex => { masks.push(regex); return regex; },
     screenshot: async options => { assert.equal(options.fullPage, false); assert.equal(options.type, 'jpeg'); assert.equal(options.path, undefined);
-      assert.equal(options.mask.length, 3); assert.equal(options.timeout, 2000); return Buffer.from('synthetic'); },
+      assert.equal(options.mask.length, 3); assert.equal(options.timeout, 5000); return Buffer.from('synthetic'); },
   };
   assert.ok(await captureTelegramScreenshot(page, { secrets: ['SYNTHETIC.NAME', 'synthetic@example.invalid'] }));
   assert.ok(masks[1].test('SYNTHETIC.NAME')); assert.equal(masks[1].test('SYNTHETICxNAME'), false);
@@ -192,6 +192,45 @@ test('unavailable, changed and stalled browser views fail without delaying the o
   let changed = false;
   assert.equal(await captureTelegramScreenshot({ ...page, url: () => changed ? url + '/new' : url,
     screenshot: async () => { changed = true; return Buffer.from('synthetic'); } }), null);
+});
+
+test('capture diagnostics distinguish rejected origins, closed pages, timeout and page changes', async () => {
+  const url = 'https://icp.administracionelectronica.gob.es/selection';
+  const base = { url: () => url, locator: () => ({}), getByText: () => ({}), screenshot: async () => Buffer.from('synthetic') };
+  assert.deepEqual(await captureTelegramScreenshotResult({ ...base, url: () => 'https://pasarela-ident.clave.gob.es/' }), { status: 'origin_not_allowed', source: 'other' });
+  assert.equal((await captureTelegramScreenshotResult({ ...base, isClosed: () => true })).status, 'page_unavailable');
+  assert.equal((await captureTelegramScreenshotResult({ ...base, screenshot: () => new Promise(() => {}) }, { timeoutMs: 15 })).status, 'capture_timeout');
+  const failure = await captureTelegramScreenshotResult({ ...base, screenshot: async () => { throw new Error(token); } });
+  assert.equal(failure.status, 'capture_failed'); assert.equal(JSON.stringify(failure).includes(token), false);
+  let changed = false;
+  assert.equal((await captureTelegramScreenshotResult({ ...base, url: () => changed ? url + '/changed' : url,
+    screenshot: async () => { changed = true; return Buffer.from('synthetic'); } })).status, 'page_changed');
+});
+
+test('missing screenshots log a capture reason and never attempt a photo upload', async () => {
+  for (const reason of ['origin_not_allowed', 'page_unavailable', 'capture_timeout', 'page_changed', 'capture_failed']) {
+    const lines = [];
+    await notifyAll('revisión', undefined, {}, { enableTelegram: true, windows: async () => true,
+      telegram: async () => 'accepted', screenshot: async () => ({ status: reason, source: 'icp', error: token }),
+      telegramPhoto: () => assert.fail('No image should be uploaded'), output: line => lines.push(line),
+    });
+    assert.ok(lines.some(line => line.includes(reason) && line.includes('no se intentó subir')));
+    assert.equal(lines.join('').includes(token), false);
+  }
+});
+
+test('upload diagnostics include only numeric HTTP/API codes and never API descriptions or tokens', async () => {
+  const result = await sendTelegramPhoto('prueba', Buffer.from('synthetic'), { env, diagnostics: true,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ ok: false, error_code: 400, description: token, result: { chat: { id: 'PRIVATE' } } }) }),
+  });
+  assert.deepEqual(result, { status: 'failed', httpStatus: 200, apiErrorCode: 400 });
+  const lines = [];
+  await notifyAll('revisión', undefined, {}, { enableTelegram: true, windows: async () => true, telegram: async () => 'accepted',
+    screenshot: async () => ({ status: 'captured', source: 'icp', image: Buffer.from('synthetic') }),
+    telegramPhoto: async () => ({ ...result, description: token }), output: line => lines.push(line),
+  });
+  assert.ok(lines.some(line => line.includes('Captura generada') && line.includes('HTTP: 200') && line.includes('API: 400')));
+  assert.equal(lines.join('').includes(token), false);
 });
 
 const update = (id, text, type = 'private', updateId = 1) => ({ update_id: updateId,

@@ -10,7 +10,7 @@ const { execFileSync } = require('node:child_process');
 const { options, runMonitor, holdForUser } = require('../cita-regreso.cjs');
 const { launchSession, certificateOptions } = require('../lib/browser.cjs');
 const { createPortal, ANY_OFFICE } = require('../lib/portal.cjs');
-const { captureTelegramScreenshot } = require('../lib/screenshot.cjs');
+const { captureTelegramScreenshot, captureTelegramScreenshotResult } = require('../lib/screenshot.cjs');
 
 const CONTACT = { phone: '600000001', email: 'synthetic@example.invalid' };
 const contactForm = '<h1>Datos de contacto para la cita</h1><form action="/reserve" method="post"><label for="txtTelefono">Teléfono</label><input id="txtTelefono" type="tel"><label for="emailUNO">Correo electrónico</label><input id="emailUNO" type="email"><label for="emailDOS">Confirmar correo electrónico</label><input id="emailDOS" type="email"><button>Continuar</button></form>';
@@ -21,6 +21,10 @@ async function fixture() {
   const cookies = [];
   let finalSequence = [];
   const server = http.createServer((req, res) => {
+    if (req.url === '/slow-font.woff') {
+      setTimeout(() => { res.writeHead(200, { 'content-type': 'font/woff' }); res.end(Buffer.alloc(0)); }, 3000);
+      return;
+    }
     if (req.url === '/') {
       cookies.push(req.headers.cookie || '');
       if (blocks-- > 0) { res.writeHead(429, { 'Retry-After': '1' }); res.end('Too many requests'); return; }
@@ -47,6 +51,7 @@ async function fixture() {
       }
       case '/contact': body = contactForm; break;
       case '/contact-expired': body = '<p>Su sesión ha caducado</p>' + contactForm; break;
+      case '/slow-screenshot': body = '<style>@font-face{font-family:latefont;src:url(/slow-font.woff)}h1{font:22px latefont}</style><h1>Slow local screenshot fixture</h1>'; break;
       case '/reserve': reservations++; body = 'ERROR: booking boundary crossed'; break;
       default: body = '<p>Fixture</p>';
     }
@@ -174,6 +179,12 @@ test('Telegram screenshot captures a masked local browser view without submittin
     assert.ok(Buffer.isBuffer(image)); assert.equal(image.subarray(0, 3).toString('hex'), 'ffd8ff');
     assert.equal(await session.page.locator('#txtTelefono').inputValue(), CONTACT.phone);
     assert.equal(await session.page.locator('#emailUNO').inputValue(), CONTACT.email);
+    assert.equal(site.counts().reservations, 0);
+    await session.page.goto(site.entry + 'slow-screenshot', { waitUntil: 'domcontentloaded' });
+    await session.page.evaluate(() => { void document.fonts.load('22px latefont'); });
+    const origin = new URL(site.entry).origin;
+    assert.equal((await captureTelegramScreenshotResult(session.page, { origin, timeoutMs: 2000 })).status, 'capture_timeout');
+    assert.equal((await captureTelegramScreenshotResult(session.page, { origin })).status, 'captured', 'five-second budget tolerates a slow font');
     assert.equal(site.counts().reservations, 0);
   } finally { if (session) await session.close(); await site.close(); }
 });

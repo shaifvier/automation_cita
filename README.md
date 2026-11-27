@@ -150,11 +150,18 @@ los valores del formulario no se modifican. Es una protección parcial: otros
 datos de la página podrían seguir visibles y la imagen se envía a Telegram.
 La opción autoriza esa imagen solo al chat privado configurado.
 
-La captura tiene un límite de dos segundos y la subida, de cinco. Si falla
+La captura tiene un límite de cinco segundos y la subida, de cinco. Si falla
 cualquiera, se mantiene el aviso original de texto. La aplicación no guarda la
 imagen en disco: permanece en memoria para enviarla. No se capturan otros sitios
 ni la ventana de autenticación Cl@ve. Reinicia el monitor para cargar la opción.
 `--probar-telegram` y `--probar-aviso` siguen siendo pruebas de texto sin navegador.
+
+La consola distingue ahora «Captura no generada» de «Captura generada; subida
+no confirmada». El motivo indica `capture_timeout`, `page_changed`,
+`page_unavailable`, `origin_not_allowed` o `capture_failed`; una subida fallida
+conserva su estado y, si está disponible, el código HTTP/API numérico. No imprime
+URLs, respuestas del servidor ni datos privados. La línea antigua «Captura no
+confirmada» no permite deducir retrospectivamente en qué fase falló.
 
 Referencia de imágenes: [Telegram sendPhoto](https://core.telegram.org/bots/api#sendphoto).
 
